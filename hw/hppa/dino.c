@@ -105,8 +105,6 @@ typedef struct DinoState {
     MemoryRegion bm_ram_alias;
     MemoryRegion bm_pci_alias;
     MemoryRegion bm_cpu_alias;
-
-    MemoryRegion cpu0_eir_mem;
 } DinoState;
 
 /*
@@ -452,6 +450,7 @@ PCIBus *dino_init(MemoryRegion *addr_space,
 
     dev = qdev_create(NULL, TYPE_DINO_PCI_HOST_BRIDGE);
     s = DINO_PCI_HOST_BRIDGE(dev);
+    s->iar0 = s->iar1 = CPU_HPA + 3;
 
     /* Dino PCI access from main memory.  */
     memory_region_init_io(&s->this_mem, OBJECT(s), &dino_chip_ops,
