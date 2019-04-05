@@ -10,6 +10,14 @@
  * https://parisc.wiki.kernel.org/images-parisc/7/70/Dino_3_1_Errata.pdf
  */
 
+/* Fixes:
+ * Add trace functions
+ * initialize iar0 and iar1
+ * 368bec88d1916f65050be305f88c10a46075a51c: -> track value of DINO_PCI_CONFIG_ADDR, incl. lowest 2 bits
+ * track value of DINO_IO_ADDR_EN, DINO_IO_FBB_EN, DINO_TOC_ADDR and all PCI ARB registers
+ * survives the ODE DINOTEST testsuite
+ */
+
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
@@ -82,11 +90,15 @@
 #define DINO_PCI_HOST_BRIDGE(obj) \
     OBJECT_CHECK(DinoState, (obj), TYPE_DINO_PCI_HOST_BRIDGE)
 
+#define DINO800_REGS ((DINO_TLTIM - DINO_GMASK)/4)
+static uint8_t reg800_keep_bits[DINO800_REGS] = { 1, 7, 7, 8, 7, 9, 32, 8, 30, 25, 22, 9 };
+
 typedef struct DinoState {
     PCIHostState parent_obj;
 
     /* PCI_CONFIG_ADDR is parent_obj.config_reg, via pci_host_conf_be_ops,
        so that we can map PCI_CONFIG_DATA to pci_host_data_be_ops.  */
+    uint32_t config_reg_dino; /* keep original copy, including 2 lowest bits */
 
     uint32_t iar0;
     uint32_t iar1;
@@ -98,6 +110,8 @@ typedef struct DinoState {
     uint32_t io_addr_en;
     uint32_t io_control;
     uint32_t toc_addr;
+
+    uint32_t reg800[DINO800_REGS];
 
     MemoryRegion this_mem;
     MemoryRegion pci_mem;
@@ -122,6 +136,8 @@ static void gsc_to_pci_forwarding(DinoState *s)
     tmp = extract32(s->io_control, 7, 2);
     enabled = (tmp == 0x01);
     io_addr_en = s->io_addr_en;
+    /* Mask out first (=firmware) and last (=Dino) areas. */
+    io_addr_en &= 0x7ffffffe;
 
     memory_region_transaction_begin();
     for (i = 1; i < 31; i++) {
@@ -158,6 +174,7 @@ static bool dino_chip_mem_valid(void *opaque, hwaddr addr,
     case DINO_IO_ADDR_EN:
     case DINO_PCI_IO_DATA:
     case DINO_TOC_ADDR:
+    case DINO_GMASK ... DINO_TLTIM:
         ret = true;
         break;
     case DINO_PCI_IO_DATA + 2:
@@ -240,6 +257,15 @@ static MemTxResult dino_chip_read_with_attrs(void *opaque, hwaddr addr,
     case DINO_TOC_ADDR:
         val = s->toc_addr;
         break;
+    case DINO_GMASK ... DINO_TLTIM:
+        val = s->reg800[(addr - DINO_GMASK)/4];
+        if (addr == DINO_PAMR)
+            val &= ~0x01;  /* LSB is hardwired to 0 */
+        if (addr == DINO_MLTIM)
+            val &= ~0x07;  /* 3 LSB are hardwired to 0 */
+        if (addr == DINO_BRDG_FEAT)
+            val &= ~(0x10710E0ul | 8 ); /* bits 5-7, 24 & 15 reserved */
+        break;
 
     default:
         /* Controlled by dino_chip_mem_valid above.  */
@@ -259,6 +285,7 @@ static MemTxResult dino_chip_write_with_attrs(void *opaque, hwaddr addr,
     AddressSpace *io;
     MemTxResult ret;
     uint16_t ioaddr;
+    int i;
 
     trace_dino_chip_write(addr, val);
 
@@ -286,8 +313,7 @@ static MemTxResult dino_chip_write_with_attrs(void *opaque, hwaddr addr,
         s->io_fbb_en = val & 0x03;
         break;
     case DINO_IO_ADDR_EN:
-        /* Never allow first (=firmware) and last (=Dino) areas.  */
-        s->io_addr_en = val & 0x7ffffffe;
+        s->io_addr_en = val;
         gsc_to_pci_forwarding(s);
         break;
     case DINO_IO_CONTROL:
@@ -320,6 +346,12 @@ static MemTxResult dino_chip_write_with_attrs(void *opaque, hwaddr addr,
     case DINO_IRR0:
     case DINO_IRR1:
         /* These registers are read-only.  */
+        break;
+
+    case DINO_GMASK ... DINO_TLTIM:
+        i = (addr - DINO_GMASK)/4;
+        val &= (1ul << (1+reg800_keep_bits[i])) - 1;
+        s->reg800[i] = val;
         break;
 
     default:
@@ -387,14 +419,16 @@ static const MemoryRegionOps dino_config_data_ops = {
 
 static uint64_t dino_config_addr_read(void *opaque, hwaddr addr, unsigned len)
 {
-    PCIHostState *s = opaque;
-    return s->config_reg;
+    DinoState *s = opaque;
+    return s->config_reg_dino;
 }
 
 static void dino_config_addr_write(void *opaque, hwaddr addr,
                                    uint64_t val, unsigned len)
 {
     PCIHostState *s = opaque;
+    DinoState *ds = opaque;
+    ds->config_reg_dino = val; /* keep a copy of original value */
     s->config_reg = val & ~3U;
 }
 
