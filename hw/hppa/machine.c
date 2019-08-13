@@ -126,7 +126,9 @@ static void machine_hppa_init(MachineState *machine)
 
     /* Network setup.  e1000 is good enough, failing Tulip support.  */
     for (i = 0; i < nb_nics; i++) {
-        /* pci_nic_init_nofail(&nd_table[i], pci_bus, "e1000", NULL); */
+        if (!enable_lasi_lan()) {
+            pci_nic_init_nofail(&nd_table[i], pci_bus, "e1000", NULL);
+        }
     }
 
     /* Load firmware.  Given that this is not "real" firmware,

@@ -312,9 +312,11 @@ DeviceState *lasi_init(MemoryRegion *address_space)
     qdev_init_nofail(dev);
 
     /* LAN */
-    qemu_irq lan_irq = qemu_allocate_irq(lasi_set_irq, s,
-            lasi_get_irq(LASI_LAN_HPA));
-    lasi_82596_init(address_space, LASI_LAN_HPA, lan_irq);
+    if (enable_lasi_lan()) {
+        qemu_irq lan_irq = qemu_allocate_irq(lasi_set_irq, s,
+                lasi_get_irq(LASI_LAN_HPA));
+        lasi_82596_init(address_space, LASI_LAN_HPA, lan_irq);
+    }
 
     /* Parallel port */
     qemu_irq lpt_irq = qemu_allocate_irq(lasi_set_irq, s,
