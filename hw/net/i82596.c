@@ -1,5 +1,5 @@
 /*
- * QEMU i82596 emulation
+ * QEMU Intel i82596 (Apricot) emulation
  *
  * Copyright (c) 2019 Helge Deller <deller@gmx.de>
  * This work is licensed under the GNU GPL license version 2 or later.
@@ -150,6 +150,7 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
             address_space_rw(&address_space_memory, tba,
                 MEMTXATTRS_UNSPECIFIED, s->tx_buffer, len, 0);
             DBG(PRINT_PKTHDR("Send", &s->tx_buffer));
+printf("Sending %d bytes\n", len);
             qemu_send_packet(qemu_get_queue(s->nic), s->tx_buffer, len);
         }
 
@@ -234,6 +235,7 @@ static void command_loop(I82596State *s)
 {
     uint16_t cmd;
     uint16_t status;
+    uint8_t byte_cnt;
 
     DBG(printf("STARTING COMMAND LOOP cmd_p=%08x\n", s->cmd_p));
 
@@ -253,11 +255,20 @@ static void command_loop(I82596State *s)
             set_individual_address(s, s->cmd_p);
             break;
         case CmdConfigure:
+            byte_cnt = get_byte(s->cmd_p + 8) & 0x0f;
+            byte_cnt = MAX(byte_cnt, 4);
+            byte_cnt = MIN(byte_cnt, sizeof(s->config));
+            /* copy byte_cnt max. */
             address_space_rw(&address_space_memory, s->cmd_p + 8,
-                MEMTXATTRS_UNSPECIFIED, s->config, sizeof(s->config), 0);
-            assert(s->config[2] & 0x80); /* do not save bad frames */
-            assert(s->config[10] == 0x40);  /* min frame length */
+                MEMTXATTRS_UNSPECIFIED, s->config, byte_cnt, 0);
+            /* config byte according to page 35ff */
+            s->config[2] &= 0x82; /* mask valid bits */
+            s->config[2] |= 0x40;
+            s->config[7]  &= 0xf7; /* clear zero bit */
             assert(I596_NOCRC_INS == 0); /* do CRC insertion */
+            s->config[10] = MAX(s->config[10], 5); /* min frame length */
+            s->config[12] &= 0x40; /* only full duplex field valid */
+            s->config[13] |= 0x3f; /* set ones in byte 13 */
             break;
         case CmdTDR:
             /* get signal LINK */
@@ -497,6 +508,8 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     static const uint8_t broadcast_macaddr[6] = {
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
+printf("i82596_receive() start\n");
+
     if (USE_TIMER && timer_pending(s->flush_queue_timer)) {
         return 0;
     }
@@ -511,6 +524,15 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         trace_i82596_receive_analysis(">>> Link down");
         return -1;
     }
+
+    /* Received frame smaller than configured "min frame len"? */
+    if (sz < s->config[10]) {
+        printf("Received frame too small, %lu vs. %u bytes\n", sz, s->config[10]);
+        /* TODO: increase frame-too-small counter? */
+        return -1;
+    }
+
+printf("Received %lu bytes\n", sz);
 
     if (I596_PROMISC) {
 
