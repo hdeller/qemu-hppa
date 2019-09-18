@@ -76,10 +76,12 @@ enum commands {
 
 /* various flags in the chip config registers */
 #define I596_PREFETCH   (s->config[0] & 0x80)
+#define I596_NO_SRC_ADD_IN (s->config[3] & 0x08) /* if 1, do not insert MAC in Tx Packet */
 #define I596_PROMISC    (s->config[8] & 0x01)
 #define I596_BC_DISABLE (s->config[8] & 0x02) /* broadcast disable */
-#define I596_NOCRC_INS  (s->config[8] & 0x08)
-#define I596_CRCINM     (s->config[11] & 0x04) /* CRC appended */
+#define I596_NOCRC_INS  (s->config[8] & 0x08) /* do not append CRC to Tx frame */
+#define I596_CRC16_32   (s->config[8] & 0x10) /* CRC-16 or CRC-32 */
+#define I596_CRCINM     (s->config[11] & 0x04) /* Rx CRC appended in memory */
 #define I596_MC_ALL     (s->config[11] & 0x20)
 #define I596_MULTIIA    (s->config[13] & 0x40)
 
@@ -134,9 +136,14 @@ struct qemu_ether_header {
 static void i82596_transmit(I82596State *s, uint32_t addr)
 {
     uint32_t tdb_p; /* Transmit Buffer Descriptor */
+    uint16_t cmd;
+    int insert_crc;
 
-    /* TODO: Check flexible mode */
+    cmd = get_uint16(addr + 2);
+    assert(cmd & 8);    /* check flexible mode */
     tdb_p = get_uint32(addr + 8);
+    /* check NC bit and possibly insert CRC */
+    insert_crc = (I596_NOCRC_INS == 0) && ((cmd & 0x10) == 0);
     while (tdb_p != I596_NULL) {
         uint16_t size, len;
         uint32_t tba;
@@ -147,16 +154,37 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
         trace_i82596_transmit(len, tba);
 
         if (s->nic && len) {
-            assert(len <= sizeof(s->tx_buffer));
+            uint16_t new_len;
+            new_len = len + 4;
+            assert(new_len <= sizeof(s->tx_buffer));
             address_space_rw(&address_space_memory, tba,
                 MEMTXATTRS_UNSPECIFIED, s->tx_buffer, len, 0);
+
+            if (I596_NO_SRC_ADD_IN == 0) {
+                /* insert MAC in Tx Packet */
+                memcpy(&s->tx_buffer[ETH_ALEN], s->conf.macaddr.a, ETH_ALEN);
+            }
+
+printf("i82596_transmit: insert_crc = %d  insert SRC = %d\n", insert_crc, I596_NO_SRC_ADD_IN == 0);
+            if (insert_crc) {
+                uint32_t crc = crc32(~0, s->tx_buffer, len);
+                crc = cpu_to_be32(crc);
+                memcpy(&s->tx_buffer[len], &crc, sizeof(crc));
+                len += sizeof(crc);
+            }
+
             DBG(PRINT_PKTHDR("Send", &s->tx_buffer));
-            DBG(printf("Sending %d bytes\n", len));
-            qemu_send_packet(qemu_get_queue(s->nic), s->tx_buffer, len);
+            printf("Sending %d bytes\n", len);
+            qemu_send_packet_raw(qemu_get_queue(s->nic), s->tx_buffer, len);
+// hw/net/milkymist-minimac2.c
+    /* send packet, skipping preamble and sfd */
+//    qemu_send_packet_raw(qemu_get_queue(s->nic), buf + 8, txcount - 12);
+
         }
 
         /* was this the last package? */
         if (size & I596_EOF) {
+            qemu_flush_queued_packets(qemu_get_queue(s->nic));
             break;
         }
 
@@ -265,8 +293,13 @@ static void command_loop(I82596State *s)
             /* config byte according to page 35ff */
             s->config[2] &= 0x82; /* mask valid bits */
             s->config[2] |= 0x40;
+            if (I596_NO_SRC_ADD_IN == 0) {
+                assert((s->config[3] & 0x07) == ETH_ALEN);
+                // if ((s->config[3] & 0x07) != ETH_ALEN) printf("CONFIG 3 ist 0x%x\n", s->config[3]);
+            }
             s->config[7]  &= 0xf7; /* clear zero bit */
-            assert(I596_NOCRC_INS == 0); /* do CRC insertion */
+            assert(I596_CRC16_32 == 0); /* only CRC-32 implemented */
+// printf("I596_CRCINM    = %d\n", I596_CRCINM);
             s->config[10] = MAX(s->config[10], 5); /* min frame length */
             s->config[12] &= 0x40; /* only full duplex field valid */
             s->config[13] |= 0x3f; /* set ones in byte 13 */
@@ -479,6 +512,9 @@ int i82596_can_receive(NetClientState *nc)
 {
     I82596State *s = qemu_get_nic_opaque(nc);
 
+    if (s->send_irq) // still waiting for irq in guest to happen (e.g. after receive)
+        return 0;
+
     if (s->rx_status == RX_SUSPENDED) {
         return 0;
     }
@@ -509,7 +545,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     static const uint8_t broadcast_macaddr[6] = {
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-    DBG(printf("i82596_receive() start\n"));
+    printf("i82596_receive() start, sz = %lu\n", sz);
 
     if (USE_TIMER && timer_pending(s->flush_queue_timer)) {
         return 0;
@@ -530,7 +566,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     if (sz < s->config[10]) {
         printf("Received frame too small, %lu vs. %u bytes\n",
             sz, s->config[10]);
-        return -1;
+        sz = 60; // return -1;
     }
 
     DBG(printf("Received %lu bytes\n", sz));
@@ -599,9 +635,12 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     }
 
     /* Calculate the ethernet checksum (4 bytes) */
-    len += 4;
-    crc = cpu_to_be32(crc32(~0, buf, sz));
-    crc_ptr = (uint8_t *) &crc;
+    if (I596_CRCINM) {
+        len += 4;
+        crc = crc32(~0, buf, sz);
+        crc = cpu_to_be32(crc);
+        crc_ptr = (uint8_t *) &crc;
+    }
 
     rfd_p = get_uint32(s->scb + 8); /* get Receive Frame Descriptor */
     assert(rfd_p && rfd_p != I596_NULL);
@@ -611,7 +650,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     assert(rbd && rbd != I596_NULL);
 
     trace_i82596_receive_packet(len);
-    /* PRINT_PKTHDR("Receive", buf); */
+    PRINT_PKTHDR("Receive", buf);
 
     while (len) {
         uint16_t command, status;
@@ -645,7 +684,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
             rba += num;
             buf += num;
             len -= num;
-            if (len == 0) { /* copy crc */
+            if (len == 0 && I596_CRCINM) { /* copy crc */
                 address_space_rw(&address_space_memory, rba - 4,
                     MEMTXATTRS_UNSPECIFIED, crc_ptr, 4, 1);
             }
@@ -687,9 +726,11 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     s->scb_status |= SCB_STATUS_FR; /* set "RU finished receiving frame" bit. */
     update_scb_status(s);
 
+//     qemu_flush_queued_packets(qemu_get_queue(s->nic));
+
     /* send IRQ that we received data */
-    qemu_set_irq(s->irq, 1);
-    /* s->send_irq = 1; */
+//    qemu_set_irq(s->irq, 1);
+    s->send_irq = 1;
 
     if (0) {
         DBG(printf("Checking:\n"));
