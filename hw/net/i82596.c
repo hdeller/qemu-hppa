@@ -165,7 +165,7 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
                 memcpy(&s->tx_buffer[ETH_ALEN], s->conf.macaddr.a, ETH_ALEN);
             }
 
-printf("i82596_transmit: insert_crc = %d  insert SRC = %d\n", insert_crc, I596_NO_SRC_ADD_IN == 0);
+            // printf("i82596_transmit: insert_crc = %d  insert SRC = %d\n", insert_crc, I596_NO_SRC_ADD_IN == 0);
             if (insert_crc) {
                 uint32_t crc = crc32(~0, s->tx_buffer, len);
                 crc = cpu_to_be32(crc);
@@ -174,7 +174,7 @@ printf("i82596_transmit: insert_crc = %d  insert SRC = %d\n", insert_crc, I596_N
             }
 
             DBG(PRINT_PKTHDR("Send", &s->tx_buffer));
-            printf("Sending %d bytes\n", len);
+            // printf("Sending %d bytes\n", len);
             qemu_send_packet_raw(qemu_get_queue(s->nic), s->tx_buffer, len);
 // hw/net/milkymist-minimac2.c
     /* send packet, skipping preamble and sfd */
@@ -512,9 +512,6 @@ int i82596_can_receive(NetClientState *nc)
 {
     I82596State *s = qemu_get_nic_opaque(nc);
 
-    if (s->send_irq) // still waiting for irq in guest to happen (e.g. after receive)
-        return 0;
-
     if (s->rx_status == RX_SUSPENDED) {
         return 0;
     }
@@ -537,7 +534,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     I82596State *s = qemu_get_nic_opaque(nc);
     uint32_t rfd_p;
     uint32_t rbd;
-    uint16_t is_broadcast = 0;
+    uint16_t status, is_broadcast = 0;
     size_t len = sz;
     uint32_t crc;
     uint8_t *crc_ptr;
@@ -545,7 +542,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     static const uint8_t broadcast_macaddr[6] = {
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-    printf("i82596_receive() start, sz = %lu\n", sz);
+    // printf("i82596_receive() start, sz = %lu\n", sz);
 
     if (USE_TIMER && timer_pending(s->flush_queue_timer)) {
         return 0;
@@ -564,7 +561,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 
     /* Received frame smaller than configured "min frame len"? */
     if (sz < s->config[10]) {
-        printf("Received frame too small, %lu vs. %u bytes\n",
+        if (0) printf("Received frame too small, %lu vs. %u bytes\n",
             sz, s->config[10]);
         sz = 60; // return -1;
     }
@@ -642,18 +639,24 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         crc_ptr = (uint8_t *) &crc;
     }
 
-    rfd_p = get_uint32(s->scb + 8); /* get Receive Frame Descriptor */
-    assert(rfd_p && rfd_p != I596_NULL);
+    rfd_p = get_uint32(s->scb + 8); /* get initial Receive Frame Descriptor */
+    do {
+        assert(rfd_p && rfd_p != I596_NULL);
+        status = get_uint16(rfd_p+0);
+        /* if rfd is filled, get next one from link addr */
+        if (status & STAT_OK)
+            rfd_p = get_uint32(rfd_p+4);
+    } while (status & STAT_OK);
 
     /* get first Receive Buffer Descriptor Address */
     rbd = get_uint32(rfd_p + 8);
     assert(rbd && rbd != I596_NULL);
 
     trace_i82596_receive_packet(len);
-    PRINT_PKTHDR("Receive", buf);
+    // PRINT_PKTHDR("Receive", buf);
 
     while (len) {
-        uint16_t command, status;
+        uint16_t command;
         uint32_t next_rfd;
 
         command = get_uint16(rfd_p + 2);
@@ -729,8 +732,8 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 //     qemu_flush_queued_packets(qemu_get_queue(s->nic));
 
     /* send IRQ that we received data */
-//    qemu_set_irq(s->irq, 1);
-    s->send_irq = 1;
+    qemu_set_irq(s->irq, 1);
+    // s->send_irq = 1;
 
     if (0) {
         DBG(printf("Checking:\n"));
@@ -743,6 +746,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         DBG(printf("Next Receive: rbd is %08x\n", rbd));
     }
 
+    // printf("i82596_receive() end sz = %lu\n", sz);
     return sz;
 }
 
