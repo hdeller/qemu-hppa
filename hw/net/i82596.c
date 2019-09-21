@@ -248,7 +248,7 @@ static void i82596_s_reset(I82596State *s)
 {
     trace_i82596_s_reset(s);
     DBG1(printf("i82596_s_reset()\n"));
-    // s->scp = 0x00FFFFF4;
+    s->scp = 0x00FFFFF4;
     s->scb_status = 0;
     s->CUS = CU_IDLE;
     s->RUS = RX_SUSPENDED;
@@ -264,7 +264,7 @@ static void command_loop(I82596State *s)
     uint16_t status;
     uint8_t byte_cnt;
 
-    DBG(printf("STARTING COMMAND LOOP cmd_p=%08x\n", s->cmd_p));
+    DBG1(printf("STARTING COMMAND LOOP cmd_p=0x%08x\n", s->cmd_p));
 
     while (s->cmd_p != I596_NULL) {
         /* set status */
@@ -273,7 +273,7 @@ static void command_loop(I82596State *s)
         status = STAT_C | STAT_OK; /* update, but write later */
 
         cmd = get_uint16(s->cmd_p + 2);
-        DBG(printf("Running command %04x at %08x\n", cmd, s->cmd_p));
+        DBG1(printf("Running command 0x%04x at 0x%08x\n", cmd, s->cmd_p));
 
         switch (cmd & 0x07) {
         case CmdNOp:
@@ -333,8 +333,9 @@ static void command_loop(I82596State *s)
         /* Suspend after doing cmd? */
         if (cmd & CMD_SUSP) {
             s->CUS = CU_SUSPENDED;
-            printf("FIXME SUSPEND !!\n");
+            printf("FIXME SUSPEND ?\n");
         }
+
         /* Interrupt after doing cmd? */
         if (cmd & CMD_INTR) {
             s->scb_status |= SCB_STAT_CX;
@@ -348,12 +349,11 @@ static void command_loop(I82596State *s)
             s->send_irq = 1;
         }
 
-        if (s->CUS != CU_ACTIVE) {
+        if (s->CUS == CU_SUSPENDED) {
             break;
         }
     }
     DBG(printf("FINISHED COMMAND LOOP\n"));
-    qemu_flush_queued_packets(qemu_get_queue(s->nic));
 }
 
 static void examine_scb(I82596State *s)
@@ -365,7 +365,7 @@ static void examine_scb(I82596State *s)
     DBG(printf("COMMAND = 0x%04x\n", command));
     cuc = (command >> 8) & 0x7;
     ruc = (command >> 4) & 0x7;
-    DBG1(printf("MAIN COMMAND %04x  cuc %02x ruc %02x\n", command, cuc, ruc));
+    DBG1(printf("MAIN COMMAND %04x stat 0x%02x cuc 0x%02x ruc 0x%02x\n", command, command >> 12,  cuc, ruc));
 
     /* toggle the STAT flags in SCB status word */
     c = command & (SCB_STAT_CX | SCB_STAT_FR | SCB_STAT_CNA | SCB_STAT_RNR);
@@ -408,14 +408,15 @@ static void examine_scb(I82596State *s)
     }
 
     /* execute commands from SCBL */
-    if (s->CUS != CU_SUSPENDED) {
+    if (s->CUS == CU_ACTIVE) {
         if (s->cmd_p == I596_NULL) {
             s->cmd_p = get_uint32(s->scb + 4);
         }
+        command_loop(s);
+        s->CUS = CU_IDLE;
     }
 
-    command_loop(s);
-
+    qemu_flush_queued_packets(qemu_get_queue(s->nic));
 }
 
 static void signal_ca(I82596State *s)
