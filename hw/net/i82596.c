@@ -254,7 +254,6 @@ static void i82596_s_reset(I82596State *s)
     s->RUS = RX_SUSPENDED;
     s->cmd_p = I596_NULL;
     s->lnkst = 0x8000; /* initial link state: up */
-    s->ca = s->ca_active = 0;
     s->send_irq = 0;
 }
 
@@ -449,7 +448,7 @@ static void signal_ca(I82596State *s)
         }
         iscp = get_uint32(s->scp + 8);
         s->scb = get_uint32(iscp + 4);
-        DBG1(printf("ISCP = 0x%08x, SCB = 0x%08x\n", iscp,s->scb);
+        DBG1(printf("ISCP = 0x%08x, SCB = 0x%08x\n", iscp,s->scb));
         /* set_uint32(iscp + 4, 0); NOT: clear SCB pointer */
         set_byte(iscp + 1, 0); /* clear BUSY flag in iscp */
         /* sets CX andCNR to equal 1 in the SCB, clears the SCB command word,
@@ -465,15 +464,8 @@ static void signal_ca(I82596State *s)
         goto _cont;
     }
 
-    s->ca++;    /* count ca() */
-    if (!s->ca_active) {
-        s->ca_active = 1;
-        while (s->ca)   {
-            examine_scb(s);
-            s->ca--;
-        }
-        s->ca_active = 0;
-    }
+    examine_scb(s);
+
 _cont:
     if (s->send_irq) {
         s->send_irq = 0;
@@ -525,6 +517,7 @@ int i82596_can_receive(NetClientState *nc)
         return 0;
     }
 
+    /* Link down? */
     if (!s->lnkst) {
         return 0;
     }
@@ -758,7 +751,6 @@ const VMStateDescription vmstate_i82596 = {
     .minimum_version_id = 1,
     .fields = (VMStateField[]) {
         VMSTATE_UINT16(lnkst, I82596State),
-        VMSTATE_TIMER_PTR(flush_queue_timer, I82596State),
         VMSTATE_END_OF_LIST()
     }
 };

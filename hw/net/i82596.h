@@ -13,7 +13,7 @@
 #define PORT_CA                 0x04    /* QEMU-internal CA signal */
 #define PORT_BYTEMASK           0x0f    /* all valid bits */
 
-/* modes in which 82596 can operate internally */
+/* modes in which the 82596 can operate */
 #define MODE_82586              0       /* 24 bit address space */
 #define MODE_32BIT_SEGMENTED    1
 #define MODE_LINEAR             2       /* 32 bit address space */
@@ -39,8 +39,6 @@ struct I82596State_st {
     uint16_t lnkst;
 
     uint32_t cmd_p;     /* addr of current command */
-    int ca;
-    int ca_active;
     int send_irq;
 
     /* Hash register (multicast mask array, multiple individual addresses). */
