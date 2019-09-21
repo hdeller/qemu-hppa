@@ -482,11 +482,11 @@ void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
         printf("i82596 SELFTEST requested.\n");
         break;
     case PORT_ALTSCP:
-        printf("i82596 ALTSCP requested.\n");
+        DBG(printf("i82596 ALTSCP requested.\n"));
         s->scp = val;
         break;
     case PORT_ALTDUMP:
-        printf("i82596 PORT_ALTDUMP not implemented.\n");
+        printf("i82596 PORT_ALTDUMP not implemented yet.\n");
         break;
     case PORT_CA:
         signal_ca(s);
