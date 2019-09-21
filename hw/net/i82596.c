@@ -293,7 +293,6 @@ static void command_loop(I82596State *s)
             s->config[2] |= 0x40;
             if (I596_NO_SRC_ADD_IN == 0) {
                 assert((s->config[3] & 0x07) == ETH_ALEN);
-                // if ((s->config[3] & 0x07) != ETH_ALEN) printf("CONFIG 3 ist 0x%x\n", s->config[3]);
             }
             s->config[7]  &= 0xf7; /* clear zero bit */
             assert(I596_CRC16_32 == 0); /* only CRC-32 implemented */
@@ -359,25 +358,18 @@ static void command_loop(I82596State *s)
 
 static void examine_scb(I82596State *s)
 {
-    uint16_t command, cuc, ruc;
+    uint16_t command, cuc, ruc, c;
 
     /* get the scb command word */
     command = get_uint16(s->scb + 2);
-    DBG(printf("COMMAND = 0x%02x\n", command));
+    DBG(printf("COMMAND = 0x%04x\n", command));
     cuc = (command >> 8) & 0x7;
     ruc = (command >> 4) & 0x7;
-    DBG(printf("MAIN COMMAND %04x  cuc %02x ruc %02x\n", command, cuc, ruc));
-    /* finally clear the scb command word */
-    set_uint16(s->scb + 2, 0);
+    DBG1(printf("MAIN COMMAND %04x  cuc %02x ruc %02x\n", command, cuc, ruc));
 
-    if (command & BIT(31))      /* ACK-CX */
-        s->scb_status &= ~SCB_STAT_CX;
-    if (command & BIT(30))      /*ACK-FR */
-        s->scb_status &= ~SCB_STAT_FR;
-    if (command & BIT(29))      /*ACK-CNA */
-        s->scb_status &= ~SCB_STAT_CNA;
-    if (command & BIT(28))      /*ACK-RNR */
-        s->scb_status &= ~SCB_STAT_RNR;
+    /* toggle the STAT flags in SCB status word */
+    c = command & (SCB_STAT_CX | SCB_STAT_FR | SCB_STAT_CNA | SCB_STAT_RNR);
+    s->scb_status &= ~c;
 
     switch (cuc) {
     case 0:     /* no change */
@@ -423,15 +415,12 @@ static void examine_scb(I82596State *s)
     }
 
     command_loop(s);
-    s->RUS = RX_NO_MORE_RBD;
 
-    /* update scb status */
-    update_scb_status(s);
 }
 
 static void signal_ca(I82596State *s)
 {
-    DBG(printf("GOT CA!\n"));
+    DBG1(printf("-- CA start\n"));
 
     /* trace_i82596_channel_attention(s); */
     if (s->scp) {
@@ -439,7 +428,7 @@ static void signal_ca(I82596State *s)
 
         /* CA after reset -> do init with new scp. */
         s->sysbus = get_byte(s->scp + 3); /* big endian */
-        printf("SYSBUS = %08x\n", s->sysbus);
+        DBG1(printf("SYSBUS = %08x\n", s->sysbus));
         s->mode = (s->sysbus >> 1) & 0x03;
         /* Only MODE_LINEAR is currently implemented. */
         assert(s->mode == MODE_LINEAR);
@@ -451,14 +440,11 @@ static void signal_ca(I82596State *s)
         DBG1(printf("ISCP = 0x%08x, SCB = 0x%08x\n", iscp,s->scb));
         /* set_uint32(iscp + 4, 0); NOT: clear SCB pointer */
         set_byte(iscp + 1, 0); /* clear BUSY flag in iscp */
-        /* sets CX andCNR to equal 1 in the SCB, clears the SCB command word,
+        /* sets CX and CNR to equal 1 in the SCB, clears the SCB command word,
          * sends an interrupt to the CPU, and awaits anotherChannel Attention signal */
+        s->scb_status = SCB_STAT_CX | SCB_STAT_CNA; // | SCB_STAT_RNR;
         s->CUS = CU_SUSPENDED;
         s->RUS = RX_SUSPENDED;
-        s->scb_status = SCB_STAT_CX; // | SCB_STAT_CNA | SCB_STAT_RNR;
-        update_scb_status(s);
-        /* and clear the scb command word */
-        set_uint16(s->scb + 2, 0);
         s->scp = 0;
         s->send_irq = 1;
         goto _cont;
@@ -467,10 +453,17 @@ static void signal_ca(I82596State *s)
     examine_scb(s);
 
 _cont:
+    /* update scb status */
+    update_scb_status(s);
+
+    /* and clear the scb command word */
+    set_uint16(s->scb + 2, 0);
+
     if (s->send_irq) {
         s->send_irq = 0;
         qemu_set_irq(s->irq, 1);
     }
+    DBG1(printf("-- CA end\n"));
 }
 
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
