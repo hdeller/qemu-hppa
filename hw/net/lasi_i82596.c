@@ -34,6 +34,7 @@ static void lasi_82596_mem_write(void *opaque, hwaddr addr,
     SysBusI82596State *d = opaque;
 
     trace_lasi_82596_mem_writew(addr, val);
+    // printf("lasi_82596_mem_write  0x%08lx  0x%lx  len %d\n", addr, val, size);
     switch (addr) {
     case PA_I82596_RESET:
         i82596_h_reset(&d->state);
@@ -42,8 +43,8 @@ static void lasi_82596_mem_write(void *opaque, hwaddr addr,
         d->val_index++;
         if (d->val_index == 0) {
             uint32_t v = d->last_val | (val << 16);
-            v = v & ~0xff;
-            i82596_ioport_writew(&d->state, d->last_val & 0xff, v);
+            v &= ~PORT_BYTEMASK;
+            i82596_ioport_writew(&d->state, d->last_val & PORT_BYTEMASK, v);
         }
         d->last_val = val;
         break;

@@ -10,7 +10,14 @@
 #define PORT_SELFTEST           0x01    /* selftest */
 #define PORT_ALTSCP             0x02    /* alternate SCB address */
 #define PORT_ALTDUMP            0x03    /* Alternate DUMP address */
-#define PORT_CA                 0x10    /* QEMU-internal CA signal */
+#define PORT_CA                 0x04    /* QEMU-internal CA signal */
+#define PORT_BYTEMASK           0x0f    /* all valid bits */
+
+/* modes in which 82596 can operate internally */
+#define MODE_82586              0       /* 24 bit address space */
+#define MODE_32BIT_SEGMENTED    1
+#define MODE_LINEAR             2       /* 32 bit address space */
+#define MODE_UNKNOWN            3
 
 typedef struct I82596State_st I82596State;
 
@@ -24,9 +31,11 @@ struct I82596State_st {
 
     hwaddr scp;         /* pointer to SCP */
     uint8_t sysbus;
+    uint8_t mode;       /* MODE_82586 or MODE_LINEAR */
     uint32_t scb;       /* SCB */
     uint16_t scb_status;
-    uint8_t cu_status, rx_status;
+    uint8_t CUS:3;      /* Command Unit status word in SCB */
+    uint8_t RUS:4;      /* Receive Unit status word in SCB */
     uint16_t lnkst;
 
     uint32_t cmd_p;     /* addr of current command */
@@ -38,7 +47,7 @@ struct I82596State_st {
     uint8_t mult[8];
     uint8_t config[14]; /* config bytes from CONFIGURE command */
 
-    uint8_t tx_buffer[0x4000];
+    uint8_t tx_buffer[1530];
 };
 
 void i82596_h_reset(void *opaque);

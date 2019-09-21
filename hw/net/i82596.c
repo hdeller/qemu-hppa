@@ -26,8 +26,7 @@
 #else
 #define DBG(x)          do { } while (0)
 #endif
-
-#define USE_TIMER       0
+#define DBG1(x)         x
 
 #define BITS(n, m) (((0xffffffffU << (31 - n)) >> (31 - n + m)) << m)
 
@@ -38,18 +37,21 @@
 
 #define I596_NULL       ((uint32_t)0xffffffff)
 
-#define SCB_STATUS_CX   0x8000 /* CU finished command with I bit */
-#define SCB_STATUS_FR   0x4000 /* RU finished receiving a frame */
-#define SCB_STATUS_CNA  0x2000 /* CU left active state */
-#define SCB_STATUS_RNR  0x1000 /* RU left active state */
+#define SCB_STAT_CX     0x8000 /* CU finished command with I bit */
+#define SCB_STAT_FR     0x4000 /* RU finished receiving a frame */
+#define SCB_STAT_CNA    0x2000 /* CU left active state */
+#define SCB_STAT_RNR    0x1000 /* RU left active state */
 
-#define CU_IDLE         0
+#define CU_IDLE         0       /* CUS values */
 #define CU_SUSPENDED    1
 #define CU_ACTIVE       2
 
-#define RX_IDLE         0
+#define RX_IDLE         0       /* RUS values */
 #define RX_SUSPENDED    1
+#define RX_NO_RESOURCES 2
 #define RX_READY        4
+#define RX_NO_RESO_RBD  0x0a
+#define RX_NO_MORE_RBD  0x0c
 
 #define CMD_EOL         0x8000  /* The last command of the list, stop. */
 #define CMD_SUSP        0x4000  /* Suspend after doing cmd. */
@@ -174,12 +176,8 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
             }
 
             DBG(PRINT_PKTHDR("Send", &s->tx_buffer));
-            // printf("Sending %d bytes\n", len);
+            DBG(printf("Sending %d bytes\n", len));
             qemu_send_packet_raw(qemu_get_queue(s->nic), s->tx_buffer, len);
-// hw/net/milkymist-minimac2.c
-    /* send packet, skipping preamble and sfd */
-//    qemu_send_packet_raw(qemu_get_queue(s->nic), buf + 8, txcount - 12);
-
         }
 
         /* was this the last package? */
@@ -241,7 +239,7 @@ void i82596_set_link_status(NetClientState *nc)
 static void update_scb_status(I82596State *s)
 {
     s->scb_status = (s->scb_status & 0xf000)
-        | (s->cu_status << 8) | (s->rx_status << 4);
+        | (s->CUS << 8) | (s->RUS << 4);
     set_uint16(s->scb, s->scb_status);
 }
 
@@ -249,10 +247,11 @@ static void update_scb_status(I82596State *s)
 static void i82596_s_reset(I82596State *s)
 {
     trace_i82596_s_reset(s);
-    s->scp = 0;
+    DBG1(printf("i82596_s_reset()\n"));
+    // s->scp = 0x00FFFFF4;
     s->scb_status = 0;
-    s->cu_status = CU_IDLE;
-    s->rx_status = RX_SUSPENDED;
+    s->CUS = CU_IDLE;
+    s->RUS = RX_SUSPENDED;
     s->cmd_p = I596_NULL;
     s->lnkst = 0x8000; /* initial link state: up */
     s->ca = s->ca_active = 0;
@@ -299,7 +298,7 @@ static void command_loop(I82596State *s)
             }
             s->config[7]  &= 0xf7; /* clear zero bit */
             assert(I596_CRC16_32 == 0); /* only CRC-32 implemented */
-// printf("I596_CRCINM    = %d\n", I596_CRCINM);
+            DBG(printf("I596_CRCINM = %d\n", I596_CRCINM));
             s->config[10] = MAX(s->config[10], 5); /* min frame length */
             s->config[12] &= 0x40; /* only full duplex field valid */
             s->config[13] |= 0x3f; /* set ones in byte 13 */
@@ -335,14 +334,14 @@ static void command_loop(I82596State *s)
         }
         /* Suspend after doing cmd? */
         if (cmd & CMD_SUSP) {
-            s->cu_status = CU_SUSPENDED;
+            s->CUS = CU_SUSPENDED;
             printf("FIXME SUSPEND !!\n");
         }
         /* Interrupt after doing cmd? */
         if (cmd & CMD_INTR) {
-            s->scb_status |= SCB_STATUS_CX;
+            s->scb_status |= SCB_STAT_CX;
         } else {
-            s->scb_status &= ~SCB_STATUS_CX;
+            s->scb_status &= ~SCB_STAT_CX;
         }
         update_scb_status(s);
 
@@ -351,23 +350,12 @@ static void command_loop(I82596State *s)
             s->send_irq = 1;
         }
 
-        if (s->cu_status != CU_ACTIVE) {
+        if (s->CUS != CU_ACTIVE) {
             break;
         }
     }
     DBG(printf("FINISHED COMMAND LOOP\n"));
     qemu_flush_queued_packets(qemu_get_queue(s->nic));
-}
-
-static void i82596_flush_queue_timer(void *opaque)
-{
-    I82596State *s = opaque;
-    if (0) {
-        timer_del(s->flush_queue_timer);
-        qemu_flush_queued_packets(qemu_get_queue(s->nic));
-        timer_mod(s->flush_queue_timer,
-              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000);
-    }
 }
 
 static void examine_scb(I82596State *s)
@@ -376,30 +364,33 @@ static void examine_scb(I82596State *s)
 
     /* get the scb command word */
     command = get_uint16(s->scb + 2);
+    DBG(printf("COMMAND = 0x%02x\n", command));
     cuc = (command >> 8) & 0x7;
     ruc = (command >> 4) & 0x7;
     DBG(printf("MAIN COMMAND %04x  cuc %02x ruc %02x\n", command, cuc, ruc));
-    /* and clear the scb command word */
+    /* finally clear the scb command word */
     set_uint16(s->scb + 2, 0);
 
     if (command & BIT(31))      /* ACK-CX */
-        s->scb_status &= ~SCB_STATUS_CX;
+        s->scb_status &= ~SCB_STAT_CX;
     if (command & BIT(30))      /*ACK-FR */
-        s->scb_status &= ~SCB_STATUS_FR;
+        s->scb_status &= ~SCB_STAT_FR;
     if (command & BIT(29))      /*ACK-CNA */
-        s->scb_status &= ~SCB_STATUS_CNA;
+        s->scb_status &= ~SCB_STAT_CNA;
     if (command & BIT(28))      /*ACK-RNR */
-        s->scb_status &= ~SCB_STATUS_RNR;
+        s->scb_status &= ~SCB_STAT_RNR;
 
     switch (cuc) {
     case 0:     /* no change */
+    case 5:
+    case 6:
         break;
     case 1:     /* CUC_START */
-        s->cu_status = CU_ACTIVE;
+        s->CUS = CU_ACTIVE;
         break;
     case 4:     /* CUC_ABORT */
-        s->cu_status = CU_SUSPENDED;
-        s->scb_status |= SCB_STATUS_CNA; /* CU left active state */
+        s->CUS = CU_SUSPENDED;
+        s->scb_status |= SCB_STAT_CNA; /* CU left active state */
         break;
     default:
         printf("WARNING: Unknown CUC %d!\n", cuc);
@@ -410,16 +401,12 @@ static void examine_scb(I82596State *s)
         break;
     case 1:     /* RX_START */
     case 2:     /* RX_RESUME */
-        s->rx_status = RX_IDLE;
-        if (USE_TIMER) {
-            timer_mod(s->flush_queue_timer, qemu_clock_get_ms(
-                                QEMU_CLOCK_VIRTUAL) + 1000);
-        }
+        s->RUS = RX_IDLE;
         break;
     case 3:     /* RX_SUSPEND */
     case 4:     /* RX_ABORT */
-        s->rx_status = RX_SUSPENDED;
-        s->scb_status |= SCB_STATUS_RNR; /* RU left active state */
+        s->RUS = RX_SUSPENDED;
+        s->scb_status |= SCB_STAT_RNR; /* RU left active state */
         break;
     default:
         printf("WARNING: Unknown RUC %d!\n", ruc);
@@ -430,37 +417,52 @@ static void examine_scb(I82596State *s)
     }
 
     /* execute commands from SCBL */
-    if (s->cu_status != CU_SUSPENDED) {
+    if (s->CUS != CU_SUSPENDED) {
         if (s->cmd_p == I596_NULL) {
             s->cmd_p = get_uint32(s->scb + 4);
         }
     }
 
+    command_loop(s);
+    s->RUS = RX_NO_MORE_RBD;
+
     /* update scb status */
     update_scb_status(s);
-
-    command_loop(s);
 }
 
 static void signal_ca(I82596State *s)
 {
-    uint32_t iscp = 0;
+    DBG(printf("GOT CA!\n"));
 
     /* trace_i82596_channel_attention(s); */
     if (s->scp) {
+        uint32_t iscp;
+
         /* CA after reset -> do init with new scp. */
         s->sysbus = get_byte(s->scp + 3); /* big endian */
-        DBG(printf("SYSBUS = %08x\n", s->sysbus));
-        if (((s->sysbus >> 1) & 0x03) != 2) {
-            printf("WARNING: NO LINEAR MODE !!\n");
-        }
+        printf("SYSBUS = %08x\n", s->sysbus);
+        s->mode = (s->sysbus >> 1) & 0x03;
+        /* Only MODE_LINEAR is currently implemented. */
+        assert(s->mode == MODE_LINEAR);
         if ((s->sysbus >> 7)) {
             printf("WARNING: 32BIT LINMODE IN B-STEPPING NOT SUPPORTED !!\n");
         }
         iscp = get_uint32(s->scp + 8);
         s->scb = get_uint32(iscp + 4);
+        DBG1(printf("ISCP = 0x%08x, SCB = 0x%08x\n", iscp,s->scb);
+        /* set_uint32(iscp + 4, 0); NOT: clear SCB pointer */
         set_byte(iscp + 1, 0); /* clear BUSY flag in iscp */
+        /* sets CX andCNR to equal 1 in the SCB, clears the SCB command word,
+         * sends an interrupt to the CPU, and awaits anotherChannel Attention signal */
+        s->CUS = CU_SUSPENDED;
+        s->RUS = RX_SUSPENDED;
+        s->scb_status = SCB_STAT_CX; // | SCB_STAT_CNA | SCB_STAT_RNR;
+        update_scb_status(s);
+        /* and clear the scb command word */
+        set_uint16(s->scb + 2, 0);
         s->scp = 0;
+        s->send_irq = 1;
+        goto _cont;
     }
 
     s->ca++;    /* count ca() */
@@ -472,7 +474,7 @@ static void signal_ca(I82596State *s)
         }
         s->ca_active = 0;
     }
-
+_cont:
     if (s->send_irq) {
         s->send_irq = 0;
         qemu_set_irq(s->irq, 1);
@@ -482,13 +484,20 @@ static void signal_ca(I82596State *s)
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
 {
     I82596State *s = opaque;
-    /* printf("i82596_ioport_writew addr=0x%08x val=0x%04x\n", addr, val); */
-    switch (addr) {
+    // printf("i82596_ioport_writew addr=0x%08x val=0x%04x\n", addr, val);
+    switch (addr & PORT_BYTEMASK) {
     case PORT_RESET: /* Reset */
         i82596_s_reset(s);
         break;
+    case PORT_SELFTEST:
+        printf("i82596 SELFTEST requested.\n");
+        break;
     case PORT_ALTSCP:
+        printf("i82596 ALTSCP requested.\n");
         s->scp = val;
+        break;
+    case PORT_ALTDUMP:
+        printf("i82596 PORT_ALTDUMP not implemented.\n");
         break;
     case PORT_CA:
         signal_ca(s);
@@ -512,16 +521,12 @@ int i82596_can_receive(NetClientState *nc)
 {
     I82596State *s = qemu_get_nic_opaque(nc);
 
-    if (s->rx_status == RX_SUSPENDED) {
+    if (s->RUS == RX_SUSPENDED) {
         return 0;
     }
 
     if (!s->lnkst) {
         return 0;
-    }
-
-    if (USE_TIMER && !timer_pending(s->flush_queue_timer)) {
-        return 1;
     }
 
     return 1;
@@ -544,12 +549,8 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 
     // printf("i82596_receive() start, sz = %lu\n", sz);
 
-    if (USE_TIMER && timer_pending(s->flush_queue_timer)) {
-        return 0;
-    }
-
     /* first check if receiver is enabled */
-    if (s->rx_status == RX_SUSPENDED) {
+    if (s->RUS == RX_SUSPENDED) {
         trace_i82596_receive_analysis(">>> Receiving suspended");
         return -1;
     }
@@ -714,8 +715,8 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         set_uint16(rfd_p, status);
 
         if (command & CMD_SUSP) {  /* suspend after command? */
-            s->rx_status = RX_SUSPENDED;
-            s->scb_status |= SCB_STATUS_RNR; /* RU left active state */
+            s->RUS = RX_SUSPENDED;
+            s->scb_status |= SCB_STAT_RNR; /* RU left active state */
             break;
         }
         if (command & CMD_EOL) /* was it last Frame Descriptor? */
@@ -726,7 +727,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 
     assert(len == 0);
 
-    s->scb_status |= SCB_STATUS_FR; /* set "RU finished receiving frame" bit. */
+    s->scb_status |= SCB_STAT_FR; /* set "RU finished receiving frame" bit. */
     update_scb_status(s);
 
 //     qemu_flush_queued_packets(qemu_get_queue(s->nic));
@@ -771,9 +772,5 @@ void i82596_common_init(DeviceState *dev, I82596State *s, NetClientInfo *info)
                 dev->id, s);
     qemu_format_nic_info_str(qemu_get_queue(s->nic), s->conf.macaddr.a);
 
-    if (USE_TIMER) {
-        s->flush_queue_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
-                                    i82596_flush_queue_timer, s);
-    }
     s->lnkst = 0x8000; /* initial link state: up */
 }
