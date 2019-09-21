@@ -30,7 +30,6 @@
 
 #define BITS(n, m) (((0xffffffffU << (31 - n)) >> (31 - n + m)) << m)
 
-#define PKT_BUF_SZ      1536
 #define MAX_MC_CNT      64
 
 #define ISCP_BUSY       0x0001
@@ -167,7 +166,8 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
                 memcpy(&s->tx_buffer[ETH_ALEN], s->conf.macaddr.a, ETH_ALEN);
             }
 
-            // printf("i82596_transmit: insert_crc = %d  insert SRC = %d\n", insert_crc, I596_NO_SRC_ADD_IN == 0);
+            DBG(printf("i82596_transmit: insert_crc = %d  insert SRC = %d\n",
+                        insert_crc, I596_NO_SRC_ADD_IN == 0));
             if (insert_crc) {
                 uint32_t crc = crc32(~0, s->tx_buffer, len);
                 crc = cpu_to_be32(crc);
@@ -247,7 +247,7 @@ static void update_scb_status(I82596State *s)
 static void i82596_s_reset(I82596State *s)
 {
     trace_i82596_s_reset(s);
-    DBG1(printf("i82596_s_reset()\n"));
+    DBG(printf("i82596_s_reset()\n"));
     s->scp = 0x00FFFFF4;
     s->scb_status = 0;
     s->CUS = CU_IDLE;
@@ -264,7 +264,7 @@ static void command_loop(I82596State *s)
     uint16_t status;
     uint8_t byte_cnt;
 
-    DBG1(printf("STARTING COMMAND LOOP cmd_p=0x%08x\n", s->cmd_p));
+    DBG(printf("STARTING COMMAND LOOP cmd_p=0x%08x\n", s->cmd_p));
 
     while (s->cmd_p != I596_NULL) {
         /* set status */
@@ -273,7 +273,7 @@ static void command_loop(I82596State *s)
         status = STAT_C | STAT_OK; /* update, but write later */
 
         cmd = get_uint16(s->cmd_p + 2);
-        DBG1(printf("Running command 0x%04x at 0x%08x\n", cmd, s->cmd_p));
+        DBG(printf("Running command 0x%04x at 0x%08x\n", cmd, s->cmd_p));
 
         switch (cmd & 0x07) {
         case CmdNOp:
@@ -321,7 +321,7 @@ static void command_loop(I82596State *s)
         set_uint16(s->cmd_p, status);
 
         s->cmd_p = get_uint32(s->cmd_p + 4); /* get link address */
-        DBG(printf("NEXT addr would be %08x\n", s->cmd_p));
+        DBG(printf("NEXT addr would be 0x%08x\n", s->cmd_p));
         if (s->cmd_p == 0) {
             s->cmd_p = I596_NULL;
         }
@@ -365,7 +365,8 @@ static void examine_scb(I82596State *s)
     DBG(printf("COMMAND = 0x%04x\n", command));
     cuc = (command >> 8) & 0x7;
     ruc = (command >> 4) & 0x7;
-    DBG1(printf("MAIN COMMAND %04x stat 0x%02x cuc 0x%02x ruc 0x%02x\n", command, command >> 12,  cuc, ruc));
+    DBG(printf("MAIN CU COMMAND 0x%04x: stat 0x%02x cuc 0x%02x ruc 0x%02x\n",
+            command, command >> 12,  cuc, ruc));
 
     /* toggle the STAT flags in SCB status word */
     c = command & (SCB_STAT_CX | SCB_STAT_FR | SCB_STAT_CNA | SCB_STAT_RNR);
@@ -421,29 +422,31 @@ static void examine_scb(I82596State *s)
 
 static void signal_ca(I82596State *s)
 {
-    DBG1(printf("-- CA start\n"));
+    DBG(printf("-- CA start\n"));
 
     /* trace_i82596_channel_attention(s); */
     if (s->scp) {
         uint32_t iscp;
+        uint8_t sysbus;
+        uint8_t mode;       /* MODE_82586 or MODE_LINEAR */
 
         /* CA after reset -> do init with new scp. */
-        s->sysbus = get_byte(s->scp + 3); /* big endian */
-        DBG1(printf("SYSBUS = %08x\n", s->sysbus));
-        s->mode = (s->sysbus >> 1) & 0x03;
+        sysbus = get_byte(s->scp + 3); /* big endian */
+        DBG(printf("SYSBUS = %08x\n", sysbus));
+        mode = (sysbus >> 1) & 0x03;
         /* Only MODE_LINEAR is currently implemented. */
-        assert(s->mode == MODE_LINEAR);
-        if ((s->sysbus >> 7)) {
+        assert(mode == MODE_LINEAR);
+        if ((sysbus >> 7)) {
             printf("WARNING: 32BIT LINMODE IN B-STEPPING NOT SUPPORTED !!\n");
         }
         iscp = get_uint32(s->scp + 8);
         s->scb = get_uint32(iscp + 4);
-        DBG1(printf("ISCP = 0x%08x, SCB = 0x%08x\n", iscp,s->scb));
+        DBG(printf("ISCP = 0x%08x, SCB = 0x%08x\n", iscp,s->scb));
         /* set_uint32(iscp + 4, 0); NOT: clear SCB pointer */
         set_byte(iscp + 1, 0); /* clear BUSY flag in iscp */
         /* sets CX and CNR to equal 1 in the SCB, clears the SCB command word,
          * sends an interrupt to the CPU, and awaits anotherChannel Attention signal */
-        s->scb_status = SCB_STAT_CX | SCB_STAT_CNA; // | SCB_STAT_RNR;
+        s->scb_status = SCB_STAT_CX | SCB_STAT_CNA;
         s->CUS = CU_SUSPENDED;
         s->RUS = RX_SUSPENDED;
         s->scp = 0;
@@ -464,13 +467,13 @@ _cont:
         s->send_irq = 0;
         qemu_set_irq(s->irq, 1);
     }
-    DBG1(printf("-- CA end\n"));
+    DBG(printf("-- CA end\n"));
 }
 
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
 {
     I82596State *s = opaque;
-    // printf("i82596_ioport_writew addr=0x%08x val=0x%04x\n", addr, val);
+    DBG(printf("i82596_ioport_writew addr=0x%08x val=0x%04x\n", addr, val));
     switch (addr & PORT_BYTEMASK) {
     case PORT_RESET: /* Reset */
         i82596_s_reset(s);
@@ -534,7 +537,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     static const uint8_t broadcast_macaddr[6] = {
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-    // printf("i82596_receive() start, sz = %lu\n", sz);
+    DBG(printf("i82596_receive() start, sz = %lu\n", sz));
 
     /* first check if receiver is enabled */
     if (s->RUS == RX_SUSPENDED) {
@@ -551,7 +554,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     if (sz < s->config[10]) {
         if (0) printf("Received frame too small, %lu vs. %u bytes\n",
             sz, s->config[10]);
-        sz = 60; // return -1;
+        sz = 60; /* return -1; */
     }
 
     DBG(printf("Received %lu bytes\n", sz));
@@ -641,7 +644,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     assert(rbd && rbd != I596_NULL);
 
     trace_i82596_receive_packet(len);
-    // PRINT_PKTHDR("Receive", buf);
+    DBG(PRINT_PKTHDR("Receive", buf));
 
     while (len) {
         uint16_t command;
@@ -652,16 +655,15 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         /* get first Receive Buffer Descriptor Address */
         rbd = get_uint32(rfd_p + 8);
         assert(get_uint16(rfd_p + 14) == 0);
-
-        /* printf("Receive: rfd is %08x\n", rfd_p); */
+        DBG(printf("Receive: rfd is %08x\n", rfd_p));
 
         while (len) {
             uint16_t buffer_size, num;
             uint32_t rba;
 
-            /* printf("Receive: rbd is %08x\n", rbd); */
+            DBG(printf("Receive: rbd is 0x%08x\n", rbd));
             buffer_size = get_uint16(rbd + 12);
-            /* printf("buffer_size is 0x%x\n", buffer_size); */
+            DBG(printf("buffer_size is 0x%x\n", buffer_size));
             assert(buffer_size != 0);
 
             num = buffer_size & SIZE_MASK;
@@ -669,7 +671,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
                 num = len;
             }
             rba = get_uint32(rbd + 8);
-            /* printf("rba is 0x%x\n", rba); */
+            DBG(printf("rba is 0x%x\n", rba));
             address_space_rw(&address_space_memory, rba,
                 MEMTXATTRS_UNSPECIFIED, (void *)buf, num, 1);
             rba += num;
@@ -688,7 +690,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 
             /* get next rbd */
             rbd = get_uint32(rbd + 4);
-            /* printf("Next Receive: rbd is %08x\n", rbd); */
+            DBG(printf("Next Receive: rbd is 0x%08x\n", rbd));
 
             if (buffer_size & I596_EOF) /* last entry */
                 break;
@@ -717,24 +719,21 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     s->scb_status |= SCB_STAT_FR; /* set "RU finished receiving frame" bit. */
     update_scb_status(s);
 
-//     qemu_flush_queued_packets(qemu_get_queue(s->nic));
-
     /* send IRQ that we received data */
     qemu_set_irq(s->irq, 1);
-    // s->send_irq = 1;
 
     if (0) {
         DBG(printf("Checking:\n"));
         rfd_p = get_uint32(s->scb + 8); /* get Receive Frame Descriptor */
-        DBG(printf("Next Receive: rfd is %08x\n", rfd_p));
+        DBG(printf("Next Receive: rfd is 0x%08x\n", rfd_p));
         rfd_p = get_uint32(rfd_p + 4); /* get Next Receive Frame Descriptor */
-        DBG(printf("Next Receive: rfd is %08x\n", rfd_p));
+        DBG(printf("Next Receive: rfd is 0x%08x\n", rfd_p));
         /* get first Receive Buffer Descriptor Address */
         rbd = get_uint32(rfd_p + 8);
-        DBG(printf("Next Receive: rbd is %08x\n", rbd));
+        DBG(printf("Next Receive: rbd is 0x%08x\n", rbd));
     }
 
-    // printf("i82596_receive() end sz = %lu\n", sz);
+    DBG(printf("i82596_receive() end sz = %lu\n", sz));
     return sz;
 }
 

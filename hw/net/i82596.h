@@ -30,22 +30,19 @@ struct I82596State_st {
     QEMUTimer *flush_queue_timer;
 
     hwaddr scp;         /* pointer to SCP */
-    uint8_t sysbus;
-    uint8_t mode;       /* MODE_82586 or MODE_LINEAR */
+    uint8_t send_irq;
     uint32_t scb;       /* SCB */
     uint16_t scb_status;
     uint8_t CUS:3;      /* Command Unit status word in SCB */
     uint8_t RUS:4;      /* Receive Unit status word in SCB */
     uint16_t lnkst;
-
     uint32_t cmd_p;     /* addr of current command */
-    int send_irq;
 
     /* Hash register (multicast mask array, multiple individual addresses). */
     uint8_t mult[8];
     uint8_t config[14]; /* config bytes from CONFIGURE command */
 
-    uint8_t tx_buffer[1530];
+    uint8_t tx_buffer[1540];
 };
 
 void i82596_h_reset(void *opaque);
