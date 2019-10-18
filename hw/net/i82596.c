@@ -49,8 +49,8 @@
 #define RX_SUSPENDED    1
 #define RX_NO_RESOURCES 2
 #define RX_READY        4
-#define RX_NO_RESO_RBD  0x0a
-#define RX_NO_MORE_RBD  0x0c
+#define RX_NO_RESO_RBD  (8 + RX_NO_RESOURCES)
+#define RX_NO_MORE_RBD  (8 + RX_READY)
 
 #define CMD_EOL         0x8000  /* The last command of the list, stop. */
 #define CMD_SUSP        0x4000  /* Suspend after doing cmd. */
@@ -239,7 +239,9 @@ void i82596_set_link_status(NetClientState *nc)
 static void update_scb_status(I82596State *s)
 {
     s->scb_status = (s->scb_status & 0xf000)
-        | (s->CUS << 8) | (s->RUS << 4);
+        | (s->CUS << 8) | (s->RUS << 4)
+        | 8 /* 8: bus throttle timers loaded */;
+    DBG1(printf("update_scb_status 0x%04x CUS: %d, RUS: %d\n", s->scb_status, s->CUS, s->RUS));
     set_uint16(s->scb, s->scb_status);
 }
 
@@ -247,11 +249,11 @@ static void update_scb_status(I82596State *s)
 static void i82596_s_reset(I82596State *s)
 {
     trace_i82596_s_reset(s);
-    DBG(printf("i82596_s_reset()\n"));
+    DBG1(printf("i82596_s_reset()\n"));
     s->scp = 0x00FFFFF4;
     s->scb_status = 0;
     s->CUS = CU_IDLE;
-    s->RUS = RX_SUSPENDED;
+    s->RUS = RX_IDLE;
     s->cmd_p = I596_NULL;
     s->lnkst = 0x8000; /* initial link state: up */
     s->send_irq = 0;
@@ -273,7 +275,8 @@ static void command_loop(I82596State *s)
         status = STAT_C | STAT_OK; /* update, but write later */
 
         cmd = get_uint16(s->cmd_p + 2);
-        DBG(printf("Running command 0x%04x at 0x%08x\n", cmd, s->cmd_p));
+        DBG1(printf("Running command 0x%04x (cmd %d) at 0x%08x\n",
+                cmd, cmd & 7, s->cmd_p));
 
         switch (cmd & 0x07) {
         case CmdNOp:
@@ -296,10 +299,21 @@ static void command_loop(I82596State *s)
             }
             s->config[7]  &= 0xf7; /* clear zero bit */
             assert(I596_CRC16_32 == 0); /* only CRC-32 implemented */
-            DBG(printf("I596_CRCINM = %d\n", I596_CRCINM));
+            DBG1(printf("I596_CRCINM = %d\n", I596_CRCINM));
             s->config[10] = MAX(s->config[10], 5); /* min frame length */
             s->config[12] &= 0x40; /* only full duplex field valid */
             s->config[13] |= 0x3f; /* set ones in byte 13 */
+            // s->scb_status = SCB_STAT_CX | SCB_STAT_CNA; // | SCB_STAT_RNR;
+            // s->send_irq = 1;
+if (0) {
+        // set_byte(s->cmd_p, 0xff);
+        set_uint16(s->cmd_p, status);
+        update_scb_status(s);
+        /* and clear the scb command word */
+        set_uint16(s->scb + 2, 0);
+        // qemu_set_irq(s->irq, 1);
+        s->send_irq = 1;
+}
             break;
         case CmdTDR:
             /* get signal LINK */
@@ -365,7 +379,7 @@ static void examine_scb(I82596State *s)
     DBG(printf("COMMAND = 0x%04x\n", command));
     cuc = (command >> 8) & 0x7;
     ruc = (command >> 4) & 0x7;
-    DBG(printf("MAIN CU COMMAND 0x%04x: stat 0x%02x cuc 0x%02x ruc 0x%02x\n",
+    DBG1(printf("MAIN CU COMMAND 0x%04x: stat 0x%02x cuc 0x%02x ruc 0x%02x\n",
             command, command >> 12,  cuc, ruc));
 
     /* toggle the STAT flags in SCB status word */
@@ -381,8 +395,9 @@ static void examine_scb(I82596State *s)
         s->CUS = CU_ACTIVE;
         break;
     case 4:     /* CUC_ABORT */
-        s->CUS = CU_SUSPENDED;
+        s->CUS = CU_IDLE;
         s->scb_status |= SCB_STAT_CNA; /* CU left active state */
+        s->send_irq = 1;
         break;
     default:
         printf("WARNING: Unknown CUC %d!\n", cuc);
@@ -393,12 +408,17 @@ static void examine_scb(I82596State *s)
         break;
     case 1:     /* RX_START */
     case 2:     /* RX_RESUME */
-        s->RUS = RX_IDLE;
+        s->RUS = RX_READY;
         break;
     case 3:     /* RX_SUSPEND */
-    case 4:     /* RX_ABORT */
         s->RUS = RX_SUSPENDED;
         s->scb_status |= SCB_STAT_RNR; /* RU left active state */
+        s->send_irq = 1;
+        break;
+    case 4:     /* RX_ABORT */
+        s->RUS = RX_IDLE;
+        s->scb_status |= SCB_STAT_RNR; /* RU left active state */
+        s->send_irq = 1;
         break;
     default:
         printf("WARNING: Unknown RUC %d!\n", ruc);
@@ -415,6 +435,7 @@ static void examine_scb(I82596State *s)
         }
         command_loop(s);
         s->CUS = CU_IDLE;
+        s->send_irq = 1;
     }
 
     qemu_flush_queued_packets(qemu_get_queue(s->nic));
@@ -422,7 +443,7 @@ static void examine_scb(I82596State *s)
 
 static void signal_ca(I82596State *s)
 {
-    DBG(printf("-- CA start\n"));
+    DBG1(printf("-- CA start\n"));
 
     /* trace_i82596_channel_attention(s); */
     if (s->scp) {
@@ -447,8 +468,8 @@ static void signal_ca(I82596State *s)
         /* sets CX and CNR to equal 1 in the SCB, clears the SCB command word,
          * sends an interrupt to the CPU, and awaits anotherChannel Attention signal */
         s->scb_status = SCB_STAT_CX | SCB_STAT_CNA;
-        s->CUS = CU_SUSPENDED;
-        s->RUS = RX_SUSPENDED;
+        s->CUS = CU_IDLE;
+        s->RUS = RX_IDLE;
         s->scp = 0;
         s->send_irq = 1;
         goto _cont;
@@ -465,9 +486,10 @@ _cont:
 
     if (s->send_irq) {
         s->send_irq = 0;
+        DBG1(printf("Send IRQ\n"));
         qemu_set_irq(s->irq, 1);
     }
-    DBG(printf("-- CA end\n"));
+    DBG1(printf("-- CA end\n"));
 }
 
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
@@ -482,7 +504,7 @@ void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
         printf("i82596 SELFTEST requested.\n");
         break;
     case PORT_ALTSCP:
-        DBG(printf("i82596 ALTSCP requested.\n"));
+        DBG1(printf("i82596 ALTSCP requested.\n"));
         s->scp = val;
         break;
     case PORT_ALTDUMP:
@@ -510,8 +532,8 @@ int i82596_can_receive(NetClientState *nc)
 {
     I82596State *s = qemu_get_nic_opaque(nc);
 
-    if (s->RUS == RX_SUSPENDED) {
-        return 0;
+    if (s->RUS != RX_READY) {
+        // return 0;
     }
 
     /* Link down? */
