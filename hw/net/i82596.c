@@ -78,6 +78,7 @@ enum commands {
 /* various flags in the chip config registers */
 #define I596_PREFETCH   (s->config[0] & 0x80)
 #define I596_NO_SRC_ADD_IN (s->config[3] & 0x08) /* if 1, do not insert MAC in Tx Packet */
+#define I596_LOOPBACK   (s->config[3] & 0xc0) /* any loopback mode */
 #define I596_PROMISC    (s->config[8] & 0x01)
 #define I596_BC_DISABLE (s->config[8] & 0x02) /* broadcast disable */
 #define I596_NOCRC_INS  (s->config[8] & 0x08) /* do not append CRC to Tx frame */
@@ -201,6 +202,7 @@ static void set_individual_address(I82596State *s, uint32_t addr)
     address_space_rw(&address_space_memory, addr + 8,
         MEMTXATTRS_UNSPECIFIED, m, ETH_ALEN, 0);
     qemu_format_nic_info_str(nc, m);
+    DBG1(printf("MAC addr set to %s\n", nc->info_str));
     trace_i82596_new_mac(nc->info_str);
 }
 
@@ -214,12 +216,13 @@ static void set_multicast_list(I82596State *s, uint32_t addr)
     if (mc_count > MAX_MC_CNT) {
         mc_count = MAX_MC_CNT;
     }
+    DBG1(printf("Add %d multicast entries.\n", mc_count));
     for (i = 0; i < mc_count; i++) {
         uint8_t multicast_addr[ETH_ALEN];
         address_space_rw(&address_space_memory,
             addr + i * ETH_ALEN, MEMTXATTRS_UNSPECIFIED,
             multicast_addr, ETH_ALEN, 0);
-        DBG(printf("Add multicast entry " MAC_FMT "\n",
+        DBG1(printf("Add multicast entry " MAC_FMT "\n",
                     MAC_ARG(multicast_addr)));
         unsigned mcast_idx = (net_crc32(multicast_addr, ETH_ALEN) &
                               BITS(7, 2)) >> 2;
@@ -266,7 +269,7 @@ static void command_loop(I82596State *s)
     uint16_t status;
     uint8_t byte_cnt;
 
-    DBG(printf("STARTING COMMAND LOOP cmd_p=0x%08x\n", s->cmd_p));
+    DBG1(printf("STARTING COMMAND LOOP cmd_p=0x%08x\n", s->cmd_p));
 
     while (s->cmd_p != I596_NULL) {
         /* set status */
@@ -294,6 +297,7 @@ static void command_loop(I82596State *s)
             /* config byte according to page 35ff */
             s->config[2] &= 0x82; /* mask valid bits */
             s->config[2] |= 0x40;
+            DBG1(printf("I596_CONFIG3 = 0x%02x  LOOPBACK 0x%x\n", s->config[3], I596_LOOPBACK));
             if (I596_NO_SRC_ADD_IN == 0) {
                 assert((s->config[3] & 0x07) == ETH_ALEN);
             }
@@ -303,17 +307,7 @@ static void command_loop(I82596State *s)
             s->config[10] = MAX(s->config[10], 5); /* min frame length */
             s->config[12] &= 0x40; /* only full duplex field valid */
             s->config[13] |= 0x3f; /* set ones in byte 13 */
-            // s->scb_status = SCB_STAT_CX | SCB_STAT_CNA; // | SCB_STAT_RNR;
-            // s->send_irq = 1;
-if (0) {
-        // set_byte(s->cmd_p, 0xff);
-        set_uint16(s->cmd_p, status);
-        update_scb_status(s);
-        /* and clear the scb command word */
-        set_uint16(s->scb + 2, 0);
-        // qemu_set_irq(s->irq, 1);
-        s->send_irq = 1;
-}
+            cmd |= CMD_INTR; /* HP-UX wants SCB_STAT_CX set with IRQ */
             break;
         case CmdTDR:
             /* get signal LINK */
@@ -335,7 +329,7 @@ if (0) {
         set_uint16(s->cmd_p, status);
 
         s->cmd_p = get_uint32(s->cmd_p + 4); /* get link address */
-        DBG(printf("NEXT addr would be 0x%08x\n", s->cmd_p));
+        DBG1(printf("NEXT loop addr is 0x%08x\n", s->cmd_p));
         if (s->cmd_p == 0) {
             s->cmd_p = I596_NULL;
         }
@@ -495,13 +489,17 @@ _cont:
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
 {
     I82596State *s = opaque;
+    uint32_t res, tmp;
     DBG(printf("i82596_ioport_writew addr=0x%08x val=0x%04x\n", addr, val));
     switch (addr & PORT_BYTEMASK) {
     case PORT_RESET: /* Reset */
         i82596_s_reset(s);
         break;
     case PORT_SELFTEST:
-        printf("i82596 SELFTEST requested.\n");
+        res = val + sizeof(uint32_t);
+        tmp = get_uint32(res); /* should be -1 */
+        DBG1(printf("i82596 SELFTEST at 0x%04x val 0x%04x requested.\n", res, tmp));
+        set_uint32(res, 0); /* set to zero */
         break;
     case PORT_ALTSCP:
         DBG1(printf("i82596 ALTSCP requested.\n"));
