@@ -307,7 +307,7 @@ static void command_loop(I82596State *s)
             s->config[10] = MAX(s->config[10], 5); /* min frame length */
             s->config[12] &= 0x40; /* only full duplex field valid */
             s->config[13] |= 0x3f; /* set ones in byte 13 */
-            cmd |= CMD_INTR; /* HP-UX wants SCB_STAT_CX set with IRQ */
+            s->scb_status |= SCB_STAT_CX;
             break;
         case CmdTDR:
             /* get signal LINK */
@@ -347,13 +347,6 @@ static void command_loop(I82596State *s)
         /* Interrupt after doing cmd? */
         if (cmd & CMD_INTR) {
             s->scb_status |= SCB_STAT_CX;
-        } else {
-            s->scb_status &= ~SCB_STAT_CX;
-        }
-        update_scb_status(s);
-
-        /* Interrupt after doing cmd? */
-        if (cmd & CMD_INTR) {
             s->send_irq = 1;
         }
 
@@ -460,7 +453,7 @@ static void signal_ca(I82596State *s)
         /* set_uint32(iscp + 4, 0); NOT: clear SCB pointer */
         set_byte(iscp + 1, 0); /* clear BUSY flag in iscp */
         /* sets CX and CNR to equal 1 in the SCB, clears the SCB command word,
-         * sends an interrupt to the CPU, and awaits anotherChannel Attention signal */
+         * sends an interrupt to the CPU, and awaits another CA signal */
         s->scb_status = SCB_STAT_CX | SCB_STAT_CNA;
         s->CUS = CU_IDLE;
         s->RUS = RX_IDLE;
