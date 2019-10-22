@@ -26,7 +26,8 @@
 #else
 #define DBG(x)          do { } while (0)
 #endif
-#define DBG1(x)         x
+//#define DBG1(x)         x
+#define DBG1(x)         do { } while (0)
 
 #define BITS(n, m) (((0xffffffffU << (31 - n)) >> (31 - n + m)) << m)
 
@@ -78,12 +79,12 @@ enum commands {
 /* various flags in the chip config registers */
 #define I596_PREFETCH   (s->config[0] & 0x80)
 #define I596_NO_SRC_ADD_IN (s->config[3] & 0x08) /* if 1, do not insert MAC in Tx Packet */
-#define I596_LOOPBACK   (s->config[3] & 0xc0) /* any loopback mode */
+#define I596_LOOPBACK   (s->config[3] >> 6)     /* loopback mode, 3 = external loopback */
 #define I596_PROMISC    (s->config[8] & 0x01)
-#define I596_BC_DISABLE (s->config[8] & 0x02) /* broadcast disable */
-#define I596_NOCRC_INS  (s->config[8] & 0x08) /* do not append CRC to Tx frame */
-#define I596_CRC16_32   (s->config[8] & 0x10) /* CRC-16 or CRC-32 */
-#define I596_CRCINM     (s->config[11] & 0x04) /* Rx CRC appended in memory */
+#define I596_BC_DISABLE (s->config[8] & 0x02)   /* broadcast disable */
+#define I596_NOCRC_INS  (s->config[8] & 0x08)   /* do not append CRC to Tx frame */
+#define I596_CRC16_32   (s->config[8] & 0x10)   /* CRC-16 or CRC-32 */
+#define I596_CRCINM     (s->config[11] & 0x04)  /* Rx CRC appended in memory */
 #define I596_MC_ALL     (s->config[11] & 0x20)
 #define I596_MULTIIA    (s->config[13] & 0x40)
 
@@ -145,7 +146,7 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
     assert(cmd & 8);    /* check flexible mode */
     tdb_p = get_uint32(addr + 8);
     /* check NC bit and possibly insert CRC */
-    insert_crc = (I596_NOCRC_INS == 0) && ((cmd & 0x10) == 0);
+    insert_crc = (I596_NOCRC_INS == 0) && ((cmd & 0x10) == 0) && !I596_LOOPBACK;
     while (tdb_p != I596_NULL) {
         uint16_t size, len;
         uint32_t tba;
@@ -176,9 +177,18 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
                 len += sizeof(crc);
             }
 
-            DBG(PRINT_PKTHDR("Send", &s->tx_buffer));
-            DBG(printf("Sending %d bytes\n", len));
-            qemu_send_packet_raw(qemu_get_queue(s->nic), s->tx_buffer, len);
+            DBG1(PRINT_PKTHDR("Send", &s->tx_buffer));
+            DBG1(printf("Sending %d bytes (crc_inserted=%d)\n", len, insert_crc));
+            switch (I596_LOOPBACK) {
+            case 0:     /* no loopback, send packet */
+                qemu_send_packet_raw(qemu_get_queue(s->nic), s->tx_buffer, len);
+                break;
+            case 1:     /* external loopback enabled */
+                i82596_receive(qemu_get_queue(s->nic), s->tx_buffer, len);
+                break;
+            default:    /* all other loopback modes: ignore! */
+                break;
+            }
         }
 
         /* was this the last package? */
@@ -303,7 +313,7 @@ static void command_loop(I82596State *s)
             }
             s->config[7]  &= 0xf7; /* clear zero bit */
             assert(I596_CRC16_32 == 0); /* only CRC-32 implemented */
-            DBG1(printf("I596_CRCINM = %d\n", I596_CRCINM));
+            DBG1(printf("I596_CRCINM = %d\n\n", I596_CRCINM));
             s->config[10] = MAX(s->config[10], 5); /* min frame length */
             s->config[12] &= 0x40; /* only full duplex field valid */
             s->config[13] |= 0x3f; /* set ones in byte 13 */
@@ -492,6 +502,7 @@ void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
         res = val + sizeof(uint32_t);
         tmp = get_uint32(res); /* should be -1 */
         DBG1(printf("i82596 SELFTEST at 0x%04x val 0x%04x requested.\n", res, tmp));
+        assert(tmp == I596_NULL);
         set_uint32(res, 0); /* set to zero */
         break;
     case PORT_ALTSCP:
@@ -550,7 +561,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     static const uint8_t broadcast_macaddr[6] = {
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
-    DBG(printf("i82596_receive() start, sz = %lu\n", sz));
+    DBG1(printf("i82596_receive() start, sz = %lu\n", sz));
 
     /* first check if receiver is enabled */
     if (s->RUS == RX_SUSPENDED) {
@@ -570,9 +581,9 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         sz = 60; /* return -1; */
     }
 
-    DBG(printf("Received %lu bytes\n", sz));
+    DBG1(printf("Received %lu bytes\n", sz));
 
-    if (I596_PROMISC) {
+    if (I596_PROMISC || I596_LOOPBACK) {
 
         /* promiscuous: receive all */
         trace_i82596_receive_analysis(
@@ -636,7 +647,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     }
 
     /* Calculate the ethernet checksum (4 bytes) */
-    if (I596_CRCINM) {
+    if (I596_CRCINM && !I596_LOOPBACK) {
         len += 4;
         crc = crc32(~0, buf, sz);
         crc = cpu_to_be32(crc);
@@ -652,61 +663,74 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
             rfd_p = get_uint32(rfd_p+4);
     } while (status & STAT_OK);
 
-    /* get first Receive Buffer Descriptor Address */
-    rbd = get_uint32(rfd_p + 8);
-    assert(rbd && rbd != I596_NULL);
-
     trace_i82596_receive_packet(len);
-    DBG(PRINT_PKTHDR("Receive", buf));
+    DBG1(PRINT_PKTHDR("Receive", buf));
 
     while (len) {
         uint16_t command;
         uint32_t next_rfd;
+        uint32_t rba;
+        uint16_t rba_size;
+        uint32_t actual_count_ptr;
 
+        DBG1(printf("Receive: rfd is 0x%08x, len = %lu\n", rfd_p, len));
         command = get_uint16(rfd_p + 2);
         assert(command & CMD_FLEX); /* assert Flex Mode */
-        /* get first Receive Buffer Descriptor Address */
+
+        /* get first Receive Buffer Descriptor address */
         rbd = get_uint32(rfd_p + 8);
-        assert(get_uint16(rfd_p + 14) == 0);
-        DBG(printf("Receive: rfd is %08x\n", rfd_p));
+        assert(rbd && rbd != I596_NULL);
+
+        /* possibly store first bytes in rfd */
+        rba = rfd_p + 16;       /* 30 ?? data is behind the length field */
+        rba_size = get_uint16(rfd_p + 14); /* count of additional bytes in rfd */
+        actual_count_ptr = rfd_p + 12;
 
         while (len) {
-            uint16_t buffer_size, num;
-            uint32_t rba;
+            uint16_t num, actual_count;
 
-            DBG(printf("Receive: rbd is 0x%08x\n", rbd));
-            buffer_size = get_uint16(rbd + 12);
-            DBG(printf("buffer_size is 0x%x\n", buffer_size));
-            assert(buffer_size != 0);
+            DBG1(printf("rba is at 0x%x, rba_size = %d, cnt_ptr 0x%08x\n", rba, rba_size, actual_count_ptr));
 
-            num = buffer_size & SIZE_MASK;
+            /* store number of received bytes first */
+            num = rba_size & SIZE_MASK;
             if (num > len) {
                 num = len;
             }
-            rba = get_uint32(rbd + 8);
-            DBG(printf("rba is 0x%x\n", rba));
-            address_space_rw(&address_space_memory, rba,
-                MEMTXATTRS_UNSPECIFIED, (void *)buf, num, 1);
+            actual_count = num;
+            if (num == len) {
+                actual_count |= I596_EOF; /* set EOF BIT */
+            }
+
+            if (num) {
+                actual_count |= 0x4000; /* set F BIT */
+                set_uint16(actual_count_ptr, actual_count); /* write actual count with flags */
+
+                address_space_rw(&address_space_memory, rba,
+                    MEMTXATTRS_UNSPECIFIED, (void *)buf, num, 1);
+            }
             rba += num;
             buf += num;
             len -= num;
-            if (len == 0 && I596_CRCINM) { /* copy crc */
+            if (len == 0 && I596_CRCINM && !I596_LOOPBACK) { /* copy crc */
                 address_space_rw(&address_space_memory, rba - 4,
                     MEMTXATTRS_UNSPECIFIED, crc_ptr, 4, 1);
             }
 
-            num |= 0x4000; /* set F BIT */
-            if (len == 0) {
-                num |= I596_EOF; /* set EOF BIT */
+            if (len == 0) { // do not get next rbd
+                break;
             }
-            set_uint16(rbd + 0, num); /* write actual count with flags */
+
+            if (rba_size & I596_EOF) /* last entry */
+                break;
+
+            DBG1(printf("Receive: rbd is 0x%08x\n", rbd));
+            rba_size = get_uint16(rbd + 12);
+            rba = get_uint32(rbd + 8);
+            actual_count_ptr = rbd + 0;
+            assert(rba_size != 0);
 
             /* get next rbd */
             rbd = get_uint32(rbd + 4);
-            DBG(printf("Next Receive: rbd is 0x%08x\n", rbd));
-
-            if (buffer_size & I596_EOF) /* last entry */
-                break;
         }
 
         /* Housekeeping, see pg. 18 */
@@ -733,7 +757,11 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     update_scb_status(s);
 
     /* send IRQ that we received data */
-    qemu_set_irq(s->irq, 1);
+    if (I596_LOOPBACK) {
+        s->send_irq = 1;
+    } else {
+        qemu_set_irq(s->irq, 1);
+    }
 
     if (0) {
         DBG(printf("Checking:\n"));

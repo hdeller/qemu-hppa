@@ -30,11 +30,11 @@ struct I82596State_st {
     QEMUTimer *flush_queue_timer;
 
     hwaddr scp;         /* pointer to SCP */
-    uint8_t send_irq;
     uint32_t scb;       /* SCB */
     uint16_t scb_status;
-    uint8_t CUS:3;      /* Command Unit status word in SCB */
-    uint8_t RUS:4;      /* Receive Unit status word in SCB */
+    uint8_t  send_irq;
+    uint8_t  CUS:3;     /* Command Unit status word in SCB */
+    uint8_t  RUS:4;     /* Receive Unit status word in SCB */
     uint16_t lnkst;
     uint32_t cmd_p;     /* addr of current command */
 
