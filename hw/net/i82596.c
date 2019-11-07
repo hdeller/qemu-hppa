@@ -26,8 +26,8 @@
 #else
 #define DBG(x)          do { } while (0)
 #endif
-//#define DBG1(x)         x
-#define DBG1(x)         do { } while (0)
+#define DBG1(x)         x
+//#define DBG1(x)         do { } while (0)
 
 #define BITS(n, m) (((0xffffffffU << (31 - n)) >> (31 - n + m)) << m)
 
@@ -183,10 +183,10 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
             case 0:     /* no loopback, send packet */
                 qemu_send_packet_raw(qemu_get_queue(s->nic), s->tx_buffer, len);
                 break;
+            default:    /* all other loopback modes: ignore! */
             case 1:     /* external loopback enabled */
                 i82596_receive(qemu_get_queue(s->nic), s->tx_buffer, len);
                 break;
-            default:    /* all other loopback modes: ignore! */
                 break;
             }
         }
@@ -677,6 +677,8 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         command = get_uint16(rfd_p + 2);
         assert(command & CMD_FLEX); /* assert Flex Mode */
 
+        DBG1(printf("Receive: EL= %d,  S(uspend) = %d\n", (command & CMD_SUSP)?1:0, (command & CMD_EOL)?1:0));
+
         /* get first Receive Buffer Descriptor address */
         rbd = get_uint32(rfd_p + 8);
         assert(rbd && rbd != I596_NULL);
@@ -735,6 +737,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 
         /* Housekeeping, see pg. 18 */
         next_rfd = get_uint32(rfd_p + 4);
+        assert(next_rfd && next_rfd != I596_NULL);
         set_uint32(next_rfd + 8, rbd);
 
         status = STAT_C | STAT_OK | is_broadcast;
@@ -743,7 +746,6 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         if (command & CMD_SUSP) {  /* suspend after command? */
             s->RUS = RX_SUSPENDED;
             s->scb_status |= SCB_STAT_RNR; /* RU left active state */
-            break;
         }
         if (command & CMD_EOL) /* was it last Frame Descriptor? */
             break;
@@ -757,11 +759,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     update_scb_status(s);
 
     /* send IRQ that we received data */
-    if (I596_LOOPBACK) {
-        s->send_irq = 1;
-    } else {
-        qemu_set_irq(s->irq, 1);
-    }
+    qemu_set_irq(s->irq, 1);
 
     if (0) {
         DBG(printf("Checking:\n"));
