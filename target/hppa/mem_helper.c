@@ -17,12 +17,17 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <stddef.h>
+#include "exec/target_page.h"
 #include "qemu/osdep.h"
 #include "cpu.h"
 #include "exec/exec-all.h"
 #include "exec/helper-proto.h"
 #include "hw/core/cpu.h"
+#include "qemu/timer.h"
 #include "trace.h"
+#include <gmodule.h>
+
 
 #ifdef CONFIG_USER_ONLY
 bool hppa_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
@@ -38,49 +43,30 @@ bool hppa_cpu_tlb_fill(CPUState *cs, vaddr address, int size,
     cpu_loop_exit_restore(cs, retaddr);
 }
 #else
+
 static hppa_tlb_entry *hppa_find_tlb(CPUHPPAState *env, vaddr addr)
 {
-    int i;
+    hppa_tlb_entry key;
 
-    for (i = 0; i < ARRAY_SIZE(env->tlb); ++i) {
-        hppa_tlb_entry *ent = &env->tlb[i];
-        if (ent->va_b <= addr && addr <= ent->va_e) {
-            trace_hppa_tlb_find_entry(env, ent + i, ent->entry_valid,
-                                      ent->va_b, ent->va_e, ent->pa);
-            return ent;
-        }
-    }
-    trace_hppa_tlb_find_entry_not_found(env, addr);
-    return NULL;
+    key.page = addr >> TARGET_PAGE_BITS;
+    hppa_tlb_entry *ent = g_tree_lookup(env->tlb, &key);
+    if (ent)
+        trace_hppa_tlb_find_entry(env, ent, ent->entry_valid, ent->page << TARGET_PAGE_BITS, ent->pa);
+    else
+        trace_hppa_tlb_find_entry_not_found(env, addr);
+    return ent;
 }
 
 static void hppa_flush_tlb_ent(CPUHPPAState *env, hppa_tlb_entry *ent)
 {
     CPUState *cs = env_cpu(env);
-    unsigned i, n = 1 << (2 * ent->page_size);
-    uint64_t addr = ent->va_b;
+    trace_hppa_tlb_flush_ent(env, ent, ent->page, ent->pa);
 
-    trace_hppa_tlb_flush_ent(env, ent, ent->va_b, ent->va_e, ent->pa);
-
-    for (i = 0; i < n; ++i, addr += TARGET_PAGE_SIZE) {
-        /* Do not flush MMU_PHYS_IDX.  */
-        tlb_flush_page_by_mmuidx(cs, addr, 0xf);
-    }
-
-    memset(ent, 0, sizeof(*ent));
-    ent->va_b = -1;
-}
-
-static hppa_tlb_entry *hppa_alloc_tlb_ent(CPUHPPAState *env)
-{
-    hppa_tlb_entry *ent;
-    uint32_t i = env->tlb_last;
-
-    env->tlb_last = (i == ARRAY_SIZE(env->tlb) - 1 ? 0 : i + 1);
-    ent = &env->tlb[i];
-
-    hppa_flush_tlb_ent(env, ent);
-    return ent;
+    if (ent->entry_valid)
+        tlb_flush_page_by_mmuidx(cs, ent->page << TARGET_PAGE_BITS, 0xf);
+    env->tlb_list = g_list_delete_link(env->tlb_list, ent->tlb_list_entry);
+    g_tree_remove(env->tlb, ent);
+    env->tlb_entries--;
 }
 
 int hppa_get_physical_address(CPUHPPAState *env, vaddr addr, int mmu_idx,
@@ -107,6 +93,7 @@ int hppa_get_physical_address(CPUHPPAState *env, vaddr addr, int mmu_idx,
         goto egress;
     }
 
+    ent->cycle++;
     /* We now know the physical address.  */
     phys = ent->pa + (addr & ~TARGET_PAGE_MASK);
 
@@ -260,35 +247,51 @@ bool hppa_cpu_tlb_fill(CPUState *cs, vaddr addr, int size,
     return true;
 }
 
+static gint hppa_expire_cmp(gconstpointer _a, gconstpointer _b)
+{
+    hppa_tlb_entry *a = (hppa_tlb_entry *)_a;
+    hppa_tlb_entry *b = (hppa_tlb_entry *)_b;
+    return a->cycle - b->cycle;
+}
+
 /* Insert (Insn/Data) TLB Address.  Note this is PA 1.1 only.  */
 void HELPER(itlba)(CPUHPPAState *env, target_ulong addr, target_ureg reg)
 {
-    hppa_tlb_entry *empty = NULL;
+    unsigned long long page = addr >> TARGET_PAGE_BITS;
+    hppa_tlb_entry *entry = NULL, key;
+    GList *it, *itn;
     int i;
 
-    /* Zap any old entries covering ADDR; notice empty entries on the way.  */
-    for (i = 0; i < ARRAY_SIZE(env->tlb); ++i) {
-        hppa_tlb_entry *ent = &env->tlb[i];
-        if (ent->va_b <= addr && addr <= ent->va_e) {
-            if (ent->entry_valid) {
-                hppa_flush_tlb_ent(env, ent);
-            }
-            if (!empty) {
-                empty = ent;
-            }
+    if (env->tlb_entries > HPPA_TLB_ENTRIES) {
+        env->tlb_list = g_list_sort(env->tlb_list, hppa_expire_cmp);
+        for (it = env->tlb_list, i = 0; it && i < HPPA_TLB_ENTRIES/2; i++) {
+            itn = g_list_next(it);
+            hppa_flush_tlb_ent(env, it->data);
+            it = itn;
         }
     }
 
-    /* If we didn't see an empty entry, evict one.  */
-    if (empty == NULL) {
-        empty = hppa_alloc_tlb_ent(env);
+    key.page = page;
+    entry = g_tree_lookup(env->tlb, &key);
+    if (entry) {
+        if (entry->entry_valid) {
+            entry->entry_valid = 0;
+            CPUState *cs = env_cpu(env);
+            tlb_flush_page_by_mmuidx(cs, page, 0xf);
+        }
+        entry->page = page;
+        entry->cycle = 0;
+    } else {
+        entry = g_slice_new0(hppa_tlb_entry);
+        env->tlb_list = g_list_prepend(env->tlb_list, entry);
+        entry->tlb_list_entry = env->tlb_list;
+        entry->page = page;
+        g_tree_insert(env->tlb, entry, entry);
+        env->tlb_entries++;
     }
+    entry->pa = extract32(reg, 5, 20) << TARGET_PAGE_BITS;
+    trace_hppa_tlb_itlba(env, entry, page << TARGET_PAGE_BITS, entry->pa);
 
-    /* Note that empty->entry_valid == 0 already.  */
-    empty->va_b = addr & TARGET_PAGE_MASK;
-    empty->va_e = empty->va_b + TARGET_PAGE_SIZE - 1;
-    empty->pa = extract32(reg, 5, 20) << TARGET_PAGE_BITS;
-    trace_hppa_tlb_itlba(env, empty, empty->va_b, empty->va_e, empty->pa);
 }
 
 /* Insert (Insn/Data) TLB Protection.  Note this is PA 1.1 only.  */
@@ -322,9 +325,8 @@ static void ptlb_work(CPUState *cpu, run_on_cpu_data data)
     target_ulong addr = (target_ulong) data.target_ptr;
     hppa_tlb_entry *ent = hppa_find_tlb(env, addr);
 
-    if (ent && ent->entry_valid) {
+    if (ent)
         hppa_flush_tlb_ent(env, ent);
-    }
 }
 
 void HELPER(ptlb)(CPUHPPAState *env, target_ulong addr)
@@ -342,12 +344,16 @@ void HELPER(ptlb)(CPUHPPAState *env, target_ulong addr)
     async_safe_run_on_cpu(src, ptlb_work, data);
 }
 
+
 /* Purge (Insn/Data) TLB entry.  This affects an implementation-defined
    number of pages/entries (we choose all), and is local to the cpu.  */
 void HELPER(ptlbe)(CPUHPPAState *env)
 {
     trace_hppa_tlb_ptlbe(env);
-    memset(env->tlb, 0, sizeof(env->tlb));
+    g_list_free(env->tlb_list);
+    env->tlb_list = NULL;
+    env->tlb_entries = 0;
+    alloc_tlb(env);
     tlb_flush_by_mmuidx(env_cpu(env), 0xf);
 }
 

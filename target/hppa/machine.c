@@ -65,63 +65,6 @@ static const VMStateInfo vmstate_psw = {
     .put = put_psw,
 };
 
-/* FIXME: Use the PA2.0 format, which is a superset of the PA1.1 format.  */
-static int get_tlb(QEMUFile *f, void *opaque, size_t size,
-                   const VMStateField *field)
-{
-    hppa_tlb_entry *ent = opaque;
-    uint32_t val;
-
-    memset(ent, 0, sizeof(*ent));
-
-    ent->va_b = qemu_get_be64(f);
-    ent->pa = qemu_get_betr(f);
-    val = qemu_get_be32(f);
-
-    ent->entry_valid = extract32(val, 0, 1);
-    ent->access_id = extract32(val, 1, 18);
-    ent->u = extract32(val, 19, 1);
-    ent->ar_pl2 = extract32(val, 20, 2);
-    ent->ar_pl1 = extract32(val, 22, 2);
-    ent->ar_type = extract32(val, 24, 3);
-    ent->b = extract32(val, 27, 1);
-    ent->d = extract32(val, 28, 1);
-    ent->t = extract32(val, 29, 1);
-
-    ent->va_e = ent->va_b + TARGET_PAGE_SIZE - 1;
-    return 0;
-}
-
-static int put_tlb(QEMUFile *f, void *opaque, size_t size,
-                   const VMStateField *field, QJSON *vmdesc)
-{
-    hppa_tlb_entry *ent = opaque;
-    uint32_t val = 0;
-
-    if (ent->entry_valid) {
-        val = 1;
-        val = deposit32(val, 1, 18, ent->access_id);
-        val = deposit32(val, 19, 1, ent->u);
-        val = deposit32(val, 20, 2, ent->ar_pl2);
-        val = deposit32(val, 22, 2, ent->ar_pl1);
-        val = deposit32(val, 24, 3, ent->ar_type);
-        val = deposit32(val, 27, 1, ent->b);
-        val = deposit32(val, 28, 1, ent->d);
-        val = deposit32(val, 29, 1, ent->t);
-    }
-
-    qemu_put_be64(f, ent->va_b);
-    qemu_put_betr(f, ent->pa);
-    qemu_put_be32(f, val);
-    return 0;
-}
-
-static const VMStateInfo vmstate_tlb = {
-    .name = "tlb entry",
-    .get = get_tlb,
-    .put = put_tlb,
-};
-
 static VMStateField vmstate_env_fields[] = {
     VMSTATE_UINTTR_ARRAY(gr, CPUHPPAState, 32),
     VMSTATE_UINT64_ARRAY(fr, CPUHPPAState, 32),
@@ -152,9 +95,6 @@ static VMStateField vmstate_env_fields[] = {
 
     VMSTATE_UINT32(fr0_shadow, CPUHPPAState),
 
-    VMSTATE_ARRAY(tlb, CPUHPPAState, ARRAY_SIZE(((CPUHPPAState *)0)->tlb),
-                  0, vmstate_tlb, hppa_tlb_entry),
-    VMSTATE_UINT32(tlb_last, CPUHPPAState),
 
     VMSTATE_END_OF_LIST()
 };
