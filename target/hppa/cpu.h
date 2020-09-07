@@ -23,6 +23,7 @@
 #include "cpu-qom.h"
 #include "exec/cpu-defs.h"
 #include "exec/memory.h"
+#include <gmodule.h>
 
 /* PA-RISC 1.x processors have a strong memory model.  */
 /* ??? While we do not yet implement PA-RISC 2.0, those processors have
@@ -149,8 +150,8 @@ typedef int64_t  target_sreg;
 #endif
 
 typedef struct {
-    uint64_t va_b;
-    uint64_t va_e;
+    uint64_t page;
+    uint64_t cycle;
     target_ureg pa;
     unsigned u : 1;
     unsigned t : 1;
@@ -162,6 +163,7 @@ typedef struct {
     unsigned ar_pl2 : 2;
     unsigned entry_valid : 1;
     unsigned access_id : 16;
+    GList *tlb_list_entry;
 } hppa_tlb_entry;
 
 struct CPUHPPAState {
@@ -195,14 +197,13 @@ struct CPUHPPAState {
     target_ureg cr_back[2];  /* back of cr17/cr18 */
     target_ureg shadow[7];   /* shadow registers */
 
-    /* ??? The number of entries isn't specified by the architecture.  */
-#define HPPA_TLB_ENTRIES        256
+#define HPPA_TLB_ENTRIES        2048
 #define HPPA_BTLB_ENTRIES       0
 
     /* ??? Implement a unified itlb/dtlb for the moment.  */
-    /* ??? We should use a more intelligent data structure.  */
-    hppa_tlb_entry tlb[HPPA_TLB_ENTRIES];
-    uint32_t tlb_last;
+    GTree *tlb;
+    GList *tlb_list;
+    int tlb_entries;
 };
 
 /**
@@ -341,5 +342,6 @@ void hppa_cpu_alarm_timer(void *);
 int hppa_artype_for_page(CPUHPPAState *env, target_ulong vaddr);
 #endif
 void QEMU_NORETURN hppa_dynamic_excp(CPUHPPAState *env, int excp, uintptr_t ra);
+void alloc_tlb(CPUHPPAState *env);
 
 #endif /* HPPA_CPU_H */

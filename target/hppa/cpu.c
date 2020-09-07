@@ -111,6 +111,33 @@ static void hppa_cpu_realizefn(DeviceState *dev, Error **errp)
 #endif
 }
 
+static gint hppa_tlb_cmp(gconstpointer _a, gconstpointer _b, gpointer data)
+{
+        const hppa_tlb_entry *a = (const hppa_tlb_entry *)_a;
+        const hppa_tlb_entry *b = (const hppa_tlb_entry *)_b;
+
+        if (a->page == b->page)
+            return 0;
+
+        if (a->page > b->page)
+            return 1;
+        return -1;
+}
+
+static void hppa_tlb_destroy(gpointer _a)
+{
+    hppa_tlb_entry *ent = _a;
+//    qemu_log("free tree %p\n", ent->tlb_list_entry);
+    g_slice_free(hppa_tlb_entry, ent);
+}
+
+void alloc_tlb(CPUHPPAState *env)
+{
+    if (env->tlb)
+        g_tree_destroy(env->tlb);
+    env->tlb = g_tree_new_full(hppa_tlb_cmp, env, NULL, hppa_tlb_destroy);
+}
+
 static void hppa_cpu_initfn(Object *obj)
 {
     CPUState *cs = CPU(obj);
@@ -121,6 +148,7 @@ static void hppa_cpu_initfn(Object *obj)
     cs->exception_index = -1;
     cpu_hppa_loaded_fr0(env);
     cpu_hppa_put_psw(env, PSW_W);
+    alloc_tlb(env);
 }
 
 static ObjectClass *hppa_cpu_class_by_name(const char *cpu_model)
