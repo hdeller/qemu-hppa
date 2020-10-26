@@ -1348,8 +1348,10 @@ static void do_cmpclr(DisasContext *ctx, unsigned rt, TCGv_reg in1,
     cond = do_sub_cond(cf, dest, in1, in2, sv);
 
     /* Clear.  */
-    tcg_gen_movi_reg(dest, 0);
-    save_gpr(ctx, rt, dest);
+    if (rt != 0) { // if target is 0, ignore.
+    	tcg_gen_movi_reg(dest, 0);
+    	save_gpr(ctx, rt, dest);
+    }
     tcg_temp_free(dest);
 
     /* Install the new nullification.  */
