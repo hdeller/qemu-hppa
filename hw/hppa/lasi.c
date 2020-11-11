@@ -72,6 +72,9 @@ struct LasiState {
     MemoryRegion this_mem;
 };
 
+DeviceState *ncr53c710_init(MemoryRegion *address_space,
+        hwaddr addr, qemu_irq irq);
+
 static bool lasi_chip_mem_valid(void *opaque, hwaddr addr,
                                 unsigned size, bool is_write,
                                 MemTxAttrs attrs)
@@ -344,6 +347,13 @@ DeviceState *lasi_init(MemoryRegion *address_space)
     qemu_irq ps2kbd_irq = qemu_allocate_irq(lasi_set_irq, s,
             lasi_get_irq(LASI_PS2KBD_HPA));
     lasips2_init(address_space, LASI_PS2KBD_HPA,  ps2kbd_irq);
+
+    /* NCR53C710 SCSI */
+    if (enable_lasi_scsi()) {
+        qemu_irq scsi_irq = qemu_allocate_irq(lasi_set_irq, s,
+                lasi_get_irq(LASI_SCSI_HPA));
+        ncr53c710_init(address_space, LASI_SCSI_HPA + 0x100, scsi_irq);
+    }
 
     return dev;
 }
