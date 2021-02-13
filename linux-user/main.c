@@ -568,7 +568,7 @@ static void usage(int exitcode)
     exit(exitcode);
 }
 
-static int parse_args(int argc, char **argv)
+static int parse_args(int argc, char **argv, bool *preserve_argv0)
 {
     const char *r;
     int optind;
@@ -583,6 +583,28 @@ static int parse_args(int argc, char **argv)
         if (r != NULL) {
             arginfo->handle_opt(r);
         }
+    }
+
+    /* HACK alert.
+     * when run as an interpreter using kernel's binfmt-misc mechanism,
+     * we have to know where are we (our own binary), where's the binary being run,
+     * and what it's argv[0] element.
+     * Only with the P interpreter flag kernel passes all 3 elements as first 3 argv[],
+     * but we can't distinguish if we were run with or without this P flag.
+     * So we register a special name with binfmt-misc system, a name which ends up
+     * in "-binfmt-P", and if our argv[0] ends up with that, we assume we were run
+     * from kernel's binfmt with P flag and our first 3 args are from kernel.
+     */
+    if (strlen(argv[0]) > sizeof("binfmt-P") &&
+        strcmp(argv[0] + strlen(argv[0]) - sizeof("binfmt-P"), "-binfmt-P") == 0) {
+        if (argc < 3) {
+            (void) fprintf(stderr, "qemu: %s has to be run using kernel binfmt-misc subsystem\n", argv[0]);
+            exit(EXIT_FAILURE);
+        }
+        exec_path = argv[1];
+        handle_arg_argv0(argv[2]);
+        *preserve_argv0 = true;
+        return 2;
     }
 
     optind = 1;
@@ -654,7 +676,7 @@ int main(int argc, char **argv, char **envp)
     int ret;
     int execfd;
     unsigned long max_reserved_va;
-    bool preserve_argv0;
+    bool preserve_argv0 = 0;
 
     error_init(argv[0]);
     module_call_init(MODULE_INIT_TRACE);
@@ -685,7 +707,7 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_trace_opts);
     qemu_plugin_add_opts();
 
-    optind = parse_args(argc, argv);
+    optind = parse_args(argc, argv, &preserve_argv0);
 
     qemu_set_log_filename_flags(last_log_filename,
                                 last_log_mask | (enable_strace * LOG_STRACE),
@@ -724,7 +746,9 @@ int main(int argc, char **argv, char **envp)
 
     /*
      * get binfmt_misc flags
+     * but only if not already done by parse_args() above
      */
+    if (!preserve_argv0) {
     preserve_argv0 = !!(qemu_getauxval(AT_FLAGS) & AT_FLAGS_PRESERVE_ARGV0);
 
     /*
@@ -734,6 +758,7 @@ int main(int argc, char **argv, char **envp)
      */
     if (optind + 1 < argc && preserve_argv0) {
         optind++;
+    }
     }
 
     if (cpu_model == NULL) {
