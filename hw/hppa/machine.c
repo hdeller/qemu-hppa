@@ -186,9 +186,11 @@ static void machine_hppa_init(MachineState *machine)
     /* fw_cfg configuration interface */
     create_fw_cfg(machine);
 
-    /* SCSI disk setup. */
-    dev = DEVICE(pci_create_simple(pci_bus, -1, "lsi53c895a"));
-    lsi53c8xx_handle_legacy_cmdline(dev);
+    /* Built-in Dino SCSI */
+    if (!enable_lasi_scsi()) {
+        dev = DEVICE(pci_create_simple(pci_bus, -1, "lsi53c895a"));
+        lsi53c8xx_handle_legacy_cmdline(dev);
+    }
 
     /* Graphics setup. */
     if (machine->enable_graphics && vga_interface_type != VGA_NONE) {

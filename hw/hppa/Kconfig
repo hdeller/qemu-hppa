@@ -11,6 +11,7 @@ config DINO
     select MC146818RTC
     select LSI_SCSI_PCI
     select LASI_82596
+    select LASI_SCSI
     select LASIPS2
     select PARALLEL
     select ARTIST

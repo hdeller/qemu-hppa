@@ -24,6 +24,7 @@
 #include "hw/char/parallel.h"
 #include "hw/char/serial.h"
 #include "hw/input/lasips2.h"
+#include "hw/scsi/lasi_53c710.h"
 #include "exec/address-spaces.h"
 #include "migration/vmstate.h"
 #include "qom/object.h"
@@ -312,6 +313,13 @@ DeviceState *lasi_init(MemoryRegion *address_space)
     memory_region_add_subregion(address_space, LASI_HPA, &s->this_mem);
 
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+
+    /* SCSI */
+    if (enable_lasi_scsi()) {
+        qemu_irq scsi_irq = qemu_allocate_irq(lasi_set_irq, s,
+                lasi_get_irq(LASI_SCSI_HPA));
+        lasi_53c710_init(address_space, LASI_SCSI_HPA, scsi_irq);
+    }
 
     /* LAN */
     if (enable_lasi_lan()) {

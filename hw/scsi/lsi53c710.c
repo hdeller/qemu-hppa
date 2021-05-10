@@ -17,19 +17,12 @@
 
 #include <assert.h>
 
-// #include "qemuuaeglue.h"
-// #include "queue.h"
-
-// #include "hw/hw.h"
-// #include "hw/pci/pci.h"
-// #include "scsi/scsi.h"
-// #include "sysemu/dma.h"
-
 #include "qemu/osdep.h"
 
 #include "hw/irq.h"
 #include "hw/pci/pci.h"
 #include "hw/scsi/scsi.h"
+#include "hw/scsi/lsi53c710.h"
 #include "migration/vmstate.h"
 #include "sysemu/dma.h"
 #include "qemu/log.h"
@@ -212,7 +205,7 @@ struct LSIState710 {
     //PCIDevice parent_obj;
     /*< public >*/
 
-    //MemoryRegion mmio_io;
+    MemoryRegion mmio_io;
     //MemoryRegion ram_io;
     //MemoryRegion io_io;
 
@@ -305,12 +298,6 @@ static inline int lsi_irq_on_rsl(LSIState710 *s)
 extern void lsi710_request_cancelled(SCSIRequest *req);
 extern void lsi710_command_complete(SCSIRequest *req, uint32_t status, size_t resid);
 extern void lsi710_transfer_data(SCSIRequest *req, uint32_t len);
-extern void lsi710_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned size);
-extern uint64_t lsi710_mmio_read(void *opaque, hwaddr addr, unsigned size);
-extern void lsi_mmio_write(void *opaque, hwaddr addr, uint64_t val, unsigned size);
-extern uint64_t lsi_mmio_read(void *opaque, hwaddr addr, unsigned size);
-void lsi710_scsi_init(DeviceState *dev);
-void lsi710_scsi_reset(DeviceState *dev);
 
 
 static void lsi_soft_reset(LSIState710 *s)
@@ -2206,12 +2193,12 @@ uint64_t lsi710_mmio_read(void *opaque, hwaddr addr,
 
 #if 0
 static const MemoryRegionOps lsi_mmio_ops = {
-    lsi_mmio_read,
-    lsi_mmio_write,
+    lsi710_mmio_read,
+    lsi710_mmio_write,
     DEVICE_NATIVE_ENDIAN,
-    {
-        1,
-        1,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 1,
     },
 };
 
@@ -2281,11 +2268,6 @@ void lsi710_scsi_reset(DeviceState *dev)
 
 	memset (s, 0, sizeof(LSIState710));
     lsi_soft_reset(s);
-}
-
-void lsi710_scsi_init(DeviceState *dev)
-{
-	// dev->lsistate = calloc (sizeof(LSIState710), 1);
 }
 
 #if 0
@@ -2391,6 +2373,7 @@ static void lsi_scsi_uninit(PCIDevice *d)
     memory_region_destroy(&s->ram_io);
     memory_region_destroy(&s->io_io);
 }
+#endif
 
 static const struct SCSIBusInfo lsi_scsi_info = {
     .tcq = true,
@@ -2402,43 +2385,21 @@ static const struct SCSIBusInfo lsi_scsi_info = {
     .cancel = lsi710_request_cancelled
 };
 
-static int lsi_scsi_init(PCIDevice *dev)
+int lsi710_common_init(DeviceState *dev, Error **errp)
 {
     LSIState710 *s = LSI53C895A(dev);
     DeviceState *d = DEVICE(dev);
-    uint8_t *pci_conf;
-    Error *err = NULL;
 
-    pci_conf = dev->config;
-
-    /* PCI latency timer = 255 */
-    pci_conf[PCI_LATENCY_TIMER] = 0xff;
-    /* Interrupt pin A */
-    pci_conf[PCI_INTERRUPT_PIN] = 0x01;
-
-    memory_region_init_io(&s->mmio_io, OBJECT(s), &lsi_mmio_ops, s,
-                          "lsi-mmio", 0x400);
-    memory_region_init_io(&s->ram_io, OBJECT(s), &lsi_ram_ops, s,
-                          "lsi-ram", 0x2000);
-    memory_region_init_io(&s->io_io, OBJECT(s), &lsi_io_ops, s,
-                          "lsi-io", 256);
-
-    pci_register_bar(dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &s->io_io);
-    pci_register_bar(dev, 1, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->mmio_io);
-    pci_register_bar(dev, 2, PCI_BASE_ADDRESS_SPACE_MEMORY, &s->ram_io);
+    // memory_region_init_io(&s->mmio_io, OBJECT(s), &lsi_mmio_ops, s, "lsi-mmio", 256);
     QTAILQ_INIT(&s->queue);
 
     scsi_bus_new(&s->bus, sizeof(s->bus), d, &lsi_scsi_info, NULL);
-    if (!d->hotplugged) {
-        scsi_bus_legacy_handle_cmdline(&s->bus, &err);
-        if (err != NULL) {
-            error_free(err);
-            return -1;
-        }
-    }
+    scsi_bus_legacy_handle_cmdline(&s->bus);
+
     return 0;
 }
 
+#if 0
 static void lsi_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
@@ -2483,11 +2444,3 @@ static void lsi53c895a_register_types(void)
 
 type_init(lsi53c895a_register_types)
 #endif
-
-
-void lsi53c8xx_handle_legacy_cmdline(DeviceState *lsi_dev)
-{
-    LSIState710 *s = LSI53C895A(lsi_dev);
-
-    scsi_bus_legacy_handle_cmdline(&s->bus);
-}
