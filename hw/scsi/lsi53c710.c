@@ -20,7 +20,6 @@
 #include "qemu/osdep.h"
 
 #include "hw/irq.h"
-#include "hw/pci/pci.h"
 #include "hw/scsi/scsi.h"
 #include "hw/scsi/lsi53c710.h"
 #include "migration/vmstate.h"
@@ -50,7 +49,7 @@ do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: error: " fmt , ## __VA_ARGS__); a
 #define LSI_SCNTL0_AAP    0x02
 #define LSI_SCNTL0_EPG    0x08
 #define LSI_SCNTL0_EPC    0x08
-#define LSI_SCNTL0_WATN   0x10,
+#define LSI_SCNTL0_WATN   0x10
 #define LSI_SCNTL0_START  0x20
 
 #define LSI_SCNTL1_RCV    0x01
@@ -198,9 +197,6 @@ static inline int lsi_irq_on_rsl(LSIState710 *s)
 	return 0; //return (s->sien0 & LSI_SIST0_RSL) && (s->scid & LSI_SCID_RRE);
 }
 
-// HELGE
-#define pci710_dma_read         pci_dma_read
-#define pci710_dma_write        pci_dma_write
 #define scsi710_req_get_buf     scsi_req_get_buf
 #define scsi710_req_continue    scsi_req_continue
 #define scsi710_req_unref       scsi_req_unref
@@ -212,8 +208,13 @@ extern void lsi710_request_cancelled(SCSIRequest *req);
 extern void lsi710_command_complete(SCSIRequest *req, uint32_t status, size_t resid);
 extern void lsi710_transfer_data(SCSIRequest *req, uint32_t len);
 
+#define lsi710_dma_write(addr, buf, len) \
+    dma_memory_write(&address_space_memory, addr, buf, len)
 
-static void lsi_soft_reset(LSIState710 *s)
+#define lsi710_dma_read(addr, buf, len) \
+    dma_memory_read(&address_space_memory, addr, buf, len)
+
+static void lsi710_soft_reset(LSIState710 *s)
 {
     DPRINTF("Reset\n");
     s->carry = 0;
@@ -255,29 +256,6 @@ static void lsi_soft_reset(LSIState710 *s)
     assert(!s->current);
 }
 
-#if 0
-static int lsi_dma_40bit(LSIState710 *s)
-{
-    if ((s->ccntl1 & LSI_CCNTL1_40BIT) == LSI_CCNTL1_40BIT)
-        return 1;
-    return 0;
-}
-
-static int lsi_dma_ti64bit(LSIState710 *s)
-{
-    if ((s->ccntl1 & LSI_CCNTL1_EN64TIBMV) == LSI_CCNTL1_EN64TIBMV)
-        return 1;
-    return 0;
-}
-
-static int lsi_dma_64bit(LSIState710 *s)
-{
-    if ((s->ccntl1 & LSI_CCNTL1_EN64DBMV) == LSI_CCNTL1_EN64DBMV)
-        return 1;
-    return 0;
-}
-#endif
-
 static uint8_t lsi_reg_readb(LSIState710 *s, int offset);
 static void lsi_reg_writeb(LSIState710 *s, int offset, uint8_t val);
 static void lsi_execute_script(LSIState710 *s);
@@ -287,7 +265,7 @@ static inline uint32_t read_dword(LSIState710 *s, uint32_t addr)
 {
     uint32_t buf;
 
-	pci710_dma_read(PCI_DEVICE(s), addr, &buf, 4);
+	lsi710_dma_read(addr, &buf, 4);
     return cpu_to_le32(buf);
 }
 
@@ -419,7 +397,6 @@ static void lsi_bad_selection(LSIState710 *s, uint32_t id)
 /* Initiate a SCSI layer data transfer.  */
 static void lsi_do_dma(LSIState710 *s, int out)
 {
-    PCIDevice *pci_dev;
     uint32_t count;
     dma_addr_t addr;
     SCSIDevice *dev;
@@ -431,7 +408,6 @@ static void lsi_do_dma(LSIState710 *s, int out)
         return;
     }
 
-    pci_dev = PCI_DEVICE(s);
     dev = s->current->req->dev;
     assert(dev);
 
@@ -458,9 +434,9 @@ static void lsi_do_dma(LSIState710 *s, int out)
     }
     /* ??? Set SFBR to first data byte.  */
     if (out) {
-		pci710_dma_read(pci_dev, addr, s->current->dma_buf, count);
+		lsi710_dma_read(addr, s->current->dma_buf, count);
     } else {
-		pci710_dma_write(pci_dev, addr, s->current->dma_buf, count);
+		lsi710_dma_write(addr, s->current->dma_buf, count);
     }
     s->current->dma_len -= count;
     if (s->current->dma_len == 0) {
@@ -668,7 +644,7 @@ static void lsi_do_command(LSIState710 *s)
     DPRINTF("Send command len=%d\n", s->dbc);
     if (s->dbc > 16)
         s->dbc = 16;
-	pci710_dma_read(PCI_DEVICE(s), s->dnad, buf, s->dbc);
+	lsi710_dma_read(s->dnad, buf, s->dbc);
     DPRINTF("Send command len=%d %02x.%02x.%02x.%02x.%02x.%02x\n", s->dbc, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
     s->sfbr = buf[0];
     s->command_complete = 0;
@@ -720,7 +696,7 @@ static void lsi_do_status(LSIState710 *s)
     s->dbc = 1;
     status = s->status;
     s->sfbr = status;
-	pci710_dma_write(PCI_DEVICE(s), s->dnad, &status, 1);
+	lsi710_dma_write(s->dnad, &status, 1);
     lsi_set_phase(s, PHASE_MI);
     s->msg_action = 1;
     lsi_add_msg_byte(s, 0); /* COMMAND COMPLETE */
@@ -734,7 +710,7 @@ static void lsi_do_msgin(LSIState710 *s)
     len = s->msg_len;
     if (len > s->dbc)
         len = s->dbc;
-	pci710_dma_write(PCI_DEVICE(s), s->dnad, s->msg, len);
+	lsi710_dma_write(s->dnad, s->msg, len);
     /* Linux drivers rely on the last byte being in the SIDL.  */
     s->sidl = s->msg[len - 1];
     s->msg_len -= len;
@@ -766,7 +742,7 @@ static void lsi_do_msgin(LSIState710 *s)
 static uint8_t lsi_get_msgbyte(LSIState710 *s)
 {
     uint8_t data;
-	pci710_dma_read(PCI_DEVICE(s), s->dnad, &data, 1);
+	lsi710_dma_read(s->dnad, &data, 1);
     s->dnad++;
     s->dbc--;
     return data;
@@ -906,15 +882,14 @@ bad:
 #define LSI_BUF_SIZE 4096
 static void lsi_memcpy(LSIState710 *s, uint32_t dest, uint32_t src, int count)
 {
-    PCIDevice *d = PCI_DEVICE(s);
     int n;
     uint8_t buf[LSI_BUF_SIZE];
 
     DPRINTF("memcpy dest 0x%08x src 0x%08x count %d\n", dest, src, count);
     while (count) {
         n = (count > LSI_BUF_SIZE) ? LSI_BUF_SIZE : count;
-		pci710_dma_read(d, src, buf, n);
-		pci710_dma_write(d, dest, buf, n);
+		lsi710_dma_read(src, buf, n);
+		lsi710_dma_write(dest, buf, n);
         src += n;
         dest += n;
         count -= n;
@@ -940,7 +915,6 @@ static void lsi_wait_reselect(LSIState710 *s)
 
 static void lsi_execute_script(LSIState710 *s)
 {
-    PCIDevice *pci_dev = PCI_DEVICE(s);
     uint32_t insn;
     uint32_t addr;
     int opcode;
@@ -979,7 +953,7 @@ again:
 
             /* 32-bit Table indirect */
             offset = sextract32(addr, 0, 24);
-			pci710_dma_read(pci_dev, s->dsa + offset, buf, 8);
+			lsi710_dma_read(s->dsa + offset, buf, 8);
             /* byte count is stored in bits 0:23 only */
             s->dbc = cpu_to_le32(buf[0]) & 0xffffff;
             addr = cpu_to_le32(buf[1]);
@@ -1350,7 +1324,7 @@ again:
             n = (insn & 7);
             reg = (insn >> 16) & 0xff;
             if (insn & (1 << 24)) {
-				pci710_dma_read(pci_dev, addr, data, n);
+				lsi710_dma_read(addr, data, n);
                 DPRINTF("Load reg 0x%x size %d addr 0x%08x = %08x\n", reg, n,
                         addr, *(int *)data);
                 for (i = 0; i < n; i++) {
@@ -1361,7 +1335,7 @@ again:
                 for (i = 0; i < n; i++) {
                     data[i] = lsi_reg_readb(s, reg + i);
                 }
-				pci710_dma_write(pci_dev, addr, data, n);
+				lsi710_dma_write(addr, data, n);
             }
         }
     }
@@ -1384,182 +1358,6 @@ again:
     }
     DPRINTF("SCRIPTS execution stopped\n");
 }
-
-#if 0
-static uint8_t lsi_reg_readb(LSIState710 *s, int offset)
-{
-    uint8_t tmp;
-#define CASE_GET_REG24(name, addr) \
-    case addr: return s->name & 0xff; \
-    case addr + 1: return (s->name >> 8) & 0xff; \
-    case addr + 2: return (s->name >> 16) & 0xff;
-
-#define CASE_GET_REG32(name, addr) \
-    case addr: return s->name & 0xff; \
-    case addr + 1: return (s->name >> 8) & 0xff; \
-    case addr + 2: return (s->name >> 16) & 0xff; \
-    case addr + 3: return (s->name >> 24) & 0xff;
-
-#ifdef DEBUG_LSI_REG
-    DPRINTF("Read reg %x\n", offset);
-#endif
-    switch (offset) {
-    case 0x00: /* SCNTL0 */
-        return s->scntl0;
-    case 0x01: /* SCNTL1 */
-        return s->scntl1;
-    case 0x02: /* SCNTL2 */
-        return s->scntl2;
-    case 0x03: /* SCNTL3 */
-        return s->scntl3;
-    case 0x04: /* SCID */
-        return s->scid;
-    case 0x05: /* SXFER */
-        return s->sxfer;
-    case 0x06: /* SDID */
-        return s->sdid;
-    case 0x07: /* GPREG0 */
-        return 0x7f;
-    case 0x08: /* Revision ID */
-        return 0x00;
-    case 0xa: /* SSID */
-        return s->ssid;
-    case 0xb: /* SBCL */
-        /* ??? This is not correct. However it's (hopefully) only
-           used for diagnostics, so should be ok.  */
-        return 0;
-    case 0xc: /* DSTAT */
-        tmp = s->dstat | LSI_DSTAT_DFE;
-        if ((s->istat0 & LSI_ISTAT0_INTF) == 0)
-            s->dstat = 0;
-        lsi_update_irq(s);
-        return tmp;
-    case 0x0d: /* SSTAT0 */
-        return s->sstat0;
-    case 0x0e: /* SSTAT1 */
-        return s->sstat1;
-    case 0x0f: /* SSTAT2 */
-        return s->scntl1 & LSI_SCNTL1_CON ? 0 : 2;
-    CASE_GET_REG32(dsa, 0x10)
-    case 0x14: /* ISTAT0 */
-        return s->istat0;
-    case 0x15: /* ISTAT1 */
-        return s->istat1;
-    case 0x16: /* MBOX0 */
-        return s->mbox0;
-    case 0x17: /* MBOX1 */
-        return s->mbox1;
-    case 0x18: /* CTEST0 */
-        return 0xff;
-    case 0x19: /* CTEST1 */
-        return 0;
-    case 0x1a: /* CTEST2 */
-        tmp = s->ctest2 | LSI_CTEST2_DACK | LSI_CTEST2_CM;
-        if (s->istat0 & LSI_ISTAT0_SIGP) {
-            s->istat0 &= ~LSI_ISTAT0_SIGP;
-            tmp |= LSI_CTEST2_SIGP;
-        }
-        return tmp;
-    case 0x1b: /* CTEST3 */
-        return s->ctest3;
-    CASE_GET_REG32(temp, 0x1c)
-    case 0x20: /* DFIFO */
-        return 0;
-    case 0x21: /* CTEST4 */
-        return s->ctest4;
-    case 0x22: /* CTEST5 */
-        return s->ctest5;
-    case 0x23: /* CTEST6 */
-         return 0;
-    CASE_GET_REG24(dbc, 0x24)
-    case 0x27: /* DCMD */
-        return s->dcmd;
-    CASE_GET_REG32(dnad, 0x28)
-    CASE_GET_REG32(dsp, 0x2c)
-    CASE_GET_REG32(dsps, 0x30)
-    CASE_GET_REG32(scratch[0], 0x34)
-    case 0x38: /* DMODE */
-        return s->dmode;
-    case 0x39: /* DIEN */
-        return s->dien;
-    case 0x3a: /* SBR */
-        return s->sbr;
-    case 0x3b: /* DCNTL */
-        return s->dcntl;
-    case 0x40: /* SIEN0 */
-        return s->sien0;
-    case 0x41: /* SIEN1 */
-        return s->sien1;
-    case 0x42: /* SIST0 */
-        tmp = s->sist0;
-        s->sist0 = 0;
-        lsi_update_irq(s);
-        return tmp;
-    case 0x43: /* SIST1 */
-        tmp = s->sist1;
-        s->sist1 = 0;
-        lsi_update_irq(s);
-        return tmp;
-    case 0x46: /* MACNTL */
-        return 0x0f;
-    case 0x47: /* GPCNTL0 */
-        return 0x0f;
-    case 0x48: /* STIME0 */
-        return s->stime0;
-    case 0x4a: /* RESPID0 */
-        return s->respid0;
-    case 0x4b: /* RESPID1 */
-        return s->respid1;
-    case 0x4d: /* STEST1 */
-        return s->stest1;
-    case 0x4e: /* STEST2 */
-        return s->stest2;
-    case 0x4f: /* STEST3 */
-        return s->stest3;
-    case 0x50: /* SIDL */
-        /* This is needed by the linux drivers.  We currently only update it
-           during the MSG IN phase.  */
-        return s->sidl;
-    case 0x52: /* STEST4 */
-        return 0xe0;
-    case 0x56: /* CCNTL0 */
-        return s->ccntl0;
-    case 0x57: /* CCNTL1 */
-        return s->ccntl1;
-    case 0x58: /* SBDL */
-        /* Some drivers peek at the data bus during the MSG IN phase.  */
-        if ((s->sstat1 & PHASE_MASK) == PHASE_MI)
-            return s->msg[0];
-        return 0;
-    case 0x59: /* SBDL high */
-        return 0;
-    CASE_GET_REG32(mmrs, 0xa0)
-    CASE_GET_REG32(mmws, 0xa4)
-    CASE_GET_REG32(sfs, 0xa8)
-    CASE_GET_REG32(drs, 0xac)
-    CASE_GET_REG32(sbms, 0xb0)
-    CASE_GET_REG32(dbms, 0xb4)
-    CASE_GET_REG32(dnad64, 0xb8)
-    CASE_GET_REG32(pmjad1, 0xc0)
-    CASE_GET_REG32(pmjad2, 0xc4)
-    CASE_GET_REG32(rbc, 0xc8)
-    CASE_GET_REG32(ua, 0xcc)
-    CASE_GET_REG32(ia, 0xd4)
-    CASE_GET_REG32(sbc, 0xd8)
-    CASE_GET_REG32(csbc, 0xdc)
-    }
-    if (offset >= 0x5c && offset < 0xa0) {
-        int n;
-        int shift;
-        n = (offset - 0x58) >> 2;
-        shift = (offset & 3) * 8;
-        return (s->scratch[n] >> shift) & 0xff;
-    }
-    BADF("readb 0x%x\n", offset);
-#undef CASE_GET_REG24
-#undef CASE_GET_REG32
-}
-#endif
 
 static uint8_t lsi_reg_readb2(LSIState710 *s, int offset)
 {
@@ -1782,7 +1580,7 @@ static void lsi_reg_writeb(LSIState710 *s, int offset, uint8_t val)
             lsi_execute_script(s);
         }
         if (val & LSI_ISTAT_RST) {
-		    lsi_soft_reset(s);
+		    lsi710_soft_reset(s);
         }
         break;
 	case 0x22: /* CTEST8 */
@@ -1848,245 +1646,6 @@ static void lsi_reg_writeb(LSIState710 *s, int offset, uint8_t val)
 #undef CASE_SET_REG32
 }
 
-#if 0
-static void lsi_reg_writeb(LSIState710 *s, int offset, uint8_t val)
-{
-#define CASE_SET_REG24(name, addr) \
-    case addr    : s->name &= 0xffffff00; s->name |= val;       break; \
-    case addr + 1: s->name &= 0xffff00ff; s->name |= val << 8;  break; \
-    case addr + 2: s->name &= 0xff00ffff; s->name |= val << 16; break;
-
-#define CASE_SET_REG32(name, addr) \
-    case addr    : s->name &= 0xffffff00; s->name |= val;       break; \
-    case addr + 1: s->name &= 0xffff00ff; s->name |= val << 8;  break; \
-    case addr + 2: s->name &= 0xff00ffff; s->name |= val << 16; break; \
-    case addr + 3: s->name &= 0x00ffffff; s->name |= val << 24; break;
-
-#ifdef DEBUG_LSI_REG
-    DPRINTF("Write reg %x = %02x\n", offset, val);
-#endif
-    switch (offset) {
-    case 0x00: /* SCNTL0 */
-        s->scntl0 = val;
-        if (val & LSI_SCNTL0_START) {
-            BADF("Start sequence not implemented\n");
-        }
-        break;
-    case 0x01: /* SCNTL1 */
-        s->scntl1 = val & ~LSI_SCNTL1_SST;
-        if (val & LSI_SCNTL1_IARB) {
-            BADF("Immediate Arbritration not implemented\n");
-        }
-        if (val & LSI_SCNTL1_RST) {
-            if (!(s->sstat0 & LSI_SSTAT0_RST)) {
-//                qbus_reset_all(&s->bus.qbus);
-                s->sstat0 |= LSI_SSTAT0_RST;
-                lsi_script_scsi_interrupt(s, LSI_SIST0_RST, 0);
-            }
-        } else {
-            s->sstat0 &= ~LSI_SSTAT0_RST;
-        }
-        break;
-    case 0x02: /* SCNTL2 */
-        val &= ~(LSI_SCNTL2_WSR | LSI_SCNTL2_WSS);
-        s->scntl2 = val;
-        break;
-    case 0x03: /* SCNTL3 */
-        s->scntl3 = val;
-        break;
-    case 0x04: /* SCID */
-        s->scid = val;
-        break;
-    case 0x05: /* SXFER */
-        s->sxfer = val;
-        break;
-    case 0x06: /* SDID */
-        if ((s->ssid & 0x80) && (val & 0xf) != (s->ssid & 0xf)) {
-            BADF("Destination ID does not match SSID\n");
-        }
-        s->sdid = val & 0xf;
-        break;
-    case 0x07: /* GPREG0 */
-        break;
-    case 0x08: /* SFBR */
-        /* The CPU is not allowed to write to this register.  However the
-           SCRIPTS register move instructions are.  */
-        s->sfbr = val;
-        break;
-    case 0x0a: case 0x0b:
-        /* Openserver writes to these readonly registers on startup */
-	return;
-    case 0x0c: case 0x0d: case 0x0e: case 0x0f:
-        /* Linux writes to these readonly registers on startup.  */
-        return;
-    CASE_SET_REG32(dsa, 0x10)
-    case 0x14: /* ISTAT0 */
-        s->istat0 = (s->istat0 & 0x0f) | (val & 0xf0);
-        if (val & LSI_ISTAT0_ABRT) {
-            lsi_script_dma_interrupt(s, LSI_DSTAT_ABRT);
-        }
-        if (val & LSI_ISTAT0_INTF) {
-            s->istat0 &= ~LSI_ISTAT0_INTF;
-            lsi_update_irq(s);
-        }
-        if (s->waiting == 1 && val & LSI_ISTAT0_SIGP) {
-            DPRINTF("Woken by SIGP\n");
-            s->waiting = 0;
-            s->dsp = s->dnad;
-            lsi_execute_script(s);
-        }
-//        if (val & LSI_ISTAT0_SRST) {
-//            qdev_reset_all(DEVICE(s));
-//        }
-        break;
-    case 0x16: /* MBOX0 */
-        s->mbox0 = val;
-        break;
-    case 0x17: /* MBOX1 */
-        s->mbox1 = val;
-        break;
-    case 0x18: /* CTEST0 */
-        /* nothing to do */
-        break;
-    case 0x1a: /* CTEST2 */
-	s->ctest2 = val & LSI_CTEST2_PCICIE;
-	break;
-    case 0x1b: /* CTEST3 */
-        s->ctest3 = val & 0x0f;
-        break;
-    CASE_SET_REG32(temp, 0x1c)
-    case 0x21: /* CTEST4 */
-        if (val & 7) {
-           BADF("Unimplemented CTEST4-FBL 0x%x\n", val);
-        }
-        s->ctest4 = val;
-        break;
-    case 0x22: /* CTEST5 */
-        if (val & (LSI_CTEST5_ADCK | LSI_CTEST5_BBCK)) {
-            BADF("CTEST5 DMA increment not implemented\n");
-			val &= ~(LSI_CTEST5_ADCK | LSI_CTEST5_BBCK);
-        }
-        s->ctest5 = val;
-        break;
-    CASE_SET_REG24(dbc, 0x24)
-    CASE_SET_REG32(dnad, 0x28)
-    case 0x2c: /* DSP[0:7] */
-        s->dsp &= 0xffffff00;
-        s->dsp |= val;
-        break;
-    case 0x2d: /* DSP[8:15] */
-        s->dsp &= 0xffff00ff;
-        s->dsp |= val << 8;
-        break;
-    case 0x2e: /* DSP[16:23] */
-        s->dsp &= 0xff00ffff;
-        s->dsp |= val << 16;
-        break;
-    case 0x2f: /* DSP[24:31] */
-        s->dsp &= 0x00ffffff;
-        s->dsp |= val << 24;
-        if ((s->dmode & LSI_DMODE_MAN) == 0
-            && (s->istat1 & LSI_ISTAT1_SRUN) == 0)
-            lsi_execute_script(s);
-        break;
-    CASE_SET_REG32(dsps, 0x30)
-    CASE_SET_REG32(scratch[0], 0x34)
-    case 0x38: /* DMODE */
-        if (val & (LSI_DMODE_SIOM | LSI_DMODE_DIOM)) {
-            BADF("IO mappings not implemented\n");
-        }
-        s->dmode = val;
-        break;
-    case 0x39: /* DIEN */
-        s->dien = val;
-        lsi_update_irq(s);
-        break;
-    case 0x3a: /* SBR */
-        s->sbr = val;
-        break;
-    case 0x3b: /* DCNTL */
-        s->dcntl = val & ~(LSI_DCNTL_PFF | LSI_DCNTL_STD);
-        if ((val & LSI_DCNTL_STD) && (s->istat1 & LSI_ISTAT1_SRUN) == 0)
-            lsi_execute_script(s);
-        break;
-    case 0x40: /* SIEN0 */
-        s->sien0 = val;
-        lsi_update_irq(s);
-        break;
-    case 0x41: /* SIEN1 */
-        s->sien1 = val;
-        lsi_update_irq(s);
-        break;
-    case 0x47: /* GPCNTL0 */
-        break;
-    case 0x48: /* STIME0 */
-        s->stime0 = val;
-        break;
-    case 0x49: /* STIME1 */
-        if (val & 0xf) {
-            DPRINTF("General purpose timer not implemented\n");
-            /* ??? Raising the interrupt immediately seems to be sufficient
-               to keep the FreeBSD driver happy.  */
-            lsi_script_scsi_interrupt(s, 0, LSI_SIST1_GEN);
-        }
-        break;
-    case 0x4a: /* RESPID0 */
-        s->respid0 = val;
-        break;
-    case 0x4b: /* RESPID1 */
-        s->respid1 = val;
-        break;
-    case 0x4d: /* STEST1 */
-        s->stest1 = val;
-        break;
-    case 0x4e: /* STEST2 */
-        if (val & 1) {
-            BADF("Low level mode not implemented\n");
-        }
-        s->stest2 = val;
-        break;
-    case 0x4f: /* STEST3 */
-        if (val & 0x41) {
-            BADF("SCSI FIFO test mode not implemented\n");
-        }
-        s->stest3 = val;
-        break;
-    case 0x56: /* CCNTL0 */
-        s->ccntl0 = val;
-        break;
-    case 0x57: /* CCNTL1 */
-        s->ccntl1 = val;
-        break;
-    CASE_SET_REG32(mmrs, 0xa0)
-    CASE_SET_REG32(mmws, 0xa4)
-    CASE_SET_REG32(sfs, 0xa8)
-    CASE_SET_REG32(drs, 0xac)
-    CASE_SET_REG32(sbms, 0xb0)
-    CASE_SET_REG32(dbms, 0xb4)
-    CASE_SET_REG32(dnad64, 0xb8)
-    CASE_SET_REG32(pmjad1, 0xc0)
-    CASE_SET_REG32(pmjad2, 0xc4)
-    CASE_SET_REG32(rbc, 0xc8)
-    CASE_SET_REG32(ua, 0xcc)
-    CASE_SET_REG32(ia, 0xd4)
-    CASE_SET_REG32(sbc, 0xd8)
-    CASE_SET_REG32(csbc, 0xdc)
-    default:
-        if (offset >= 0x5c && offset < 0xa0) {
-            int n;
-            int shift;
-            n = (offset - 0x58) >> 2;
-            shift = (offset & 3) * 8;
-            s->scratch[n] = deposit32(s->scratch[n], shift, 8, val);
-        } else {
-            BADF("Unhandled writeb 0x%x = 0x%x\n", offset, val);
-        }
-    }
-#undef CASE_SET_REG24
-#undef CASE_SET_REG32
-}
-#endif
-
 void lsi710_mmio_write(void *opaque, hwaddr addr,
                            uint64_t val, unsigned size)
 {
@@ -2104,16 +1663,6 @@ uint64_t lsi710_mmio_read(void *opaque, hwaddr addr,
 }
 
 #if 0
-static const MemoryRegionOps lsi_mmio_ops = {
-    lsi710_mmio_read,
-    lsi710_mmio_write,
-    DEVICE_NATIVE_ENDIAN,
-    .valid = {
-        .min_access_size = 1,
-        .max_access_size = 1,
-    },
-};
-
 static void lsi_ram_write(void *opaque, hwaddr addr,
                           uint64_t val, unsigned size)
 {
@@ -2149,29 +1698,6 @@ static const MemoryRegionOps lsi_ram_ops = {
     DEVICE_NATIVE_ENDIAN,
 };
 
-static uint64_t lsi_io_read(void *opaque, hwaddr addr,
-                            unsigned size)
-{
-    LSIState710 *s = (LSIState710*)opaque;
-    return lsi_reg_readb(s, addr & 0xff);
-}
-
-static void lsi_io_write(void *opaque, hwaddr addr,
-                         uint64_t val, unsigned size)
-{
-    LSIState710 *s = (LSIState710*)opaque;
-    lsi_reg_writeb(s, addr & 0xff, val);
-}
-
-static const MemoryRegionOps lsi_io_ops = {
-    lsi_io_read,
-    lsi_io_write,
-    DEVICE_NATIVE_ENDIAN,
-    {
-        1,
-        1,
-    },
-};
 #endif
 
 void lsi710_scsi_reset(DeviceState *dev)
@@ -2179,7 +1705,7 @@ void lsi710_scsi_reset(DeviceState *dev)
     LSIState710 *s = LSI53C895A(dev);
 
 	memset (s, 0, sizeof(LSIState710));
-    lsi_soft_reset(s);
+    lsi710_soft_reset(s);
 }
 
 #if 0
@@ -2310,49 +1836,3 @@ int lsi710_common_init(DeviceState *dev, Error **errp)
 
     return 0;
 }
-
-#if 0
-static void lsi_class_init(ObjectClass *klass, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(klass);
-    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-
-    k->init = lsi_scsi_init;
-    k->exit = lsi_scsi_uninit;
-    k->vendor_id = PCI_VENDOR_ID_LSI_LOGIC;
-    k->device_id = PCI_DEVICE_ID_LSI_53C895A;
-    k->class_id = PCI_CLASS_STORAGE_SCSI;
-    k->subsystem_id = 0x1000;
-    dc->reset = lsi_scsi_reset;
-    dc->vmsd = &vmstate_lsi_scsi;
-    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
-}
-
-static const TypeInfo lsi_info = {
-    .name          = TYPE_LSI53C895A,
-    .parent        = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(LSIState710),
-    .class_init    = lsi_class_init,
-};
-
-static void lsi53c810_class_init(ObjectClass *klass, void *data)
-{
-    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-
-    k->device_id = PCI_DEVICE_ID_LSI_53C810;
-}
-
-static TypeInfo lsi53c810_info = {
-    .name          = TYPE_LSI53C810,
-    .parent        = TYPE_LSI53C895A,
-    .class_init    = lsi53c810_class_init,
-};
-
-static void lsi53c895a_register_types(void)
-{
-    type_register_static(&lsi_info);
-    type_register_static(&lsi53c810_info);
-}
-
-type_init(lsi53c895a_register_types)
-#endif
