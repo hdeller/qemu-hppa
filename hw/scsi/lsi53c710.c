@@ -30,12 +30,12 @@
 #include "trace.h"
 #include "qom/object.h"
 
-//#define DEBUG_LSI
-//#define DEBUG_LSI_REG
+#define DEBUG_LSI
+#define DEBUG_LSI_REG
 
 #ifdef DEBUG_LSI
-#define DPRINTF(fmt, ...) \
-do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: " fmt , ## __VA_ARGS__); } while (0)
+#define DPRINTF(...) \
+do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: " __VA_ARGS__); } while (0)
 #define BADF(fmt, ...) \
 do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: error: " fmt , ## __VA_ARGS__); } while (0)
 #else
@@ -184,95 +184,9 @@ do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: error: " fmt , ## __VA_ARGS__); a
 #define PHASE_MI          7
 #define PHASE_MASK        7
 
-/* Maximum length of MSG IN data.  */
-#define LSI_MAX_MSGIN_LEN 8
-
 /* Flag set if this is a tagged command.  */
 #define LSI_TAG_VALID     (1 << 16)
 
-typedef struct lsi_request {
-    SCSIRequest *req;
-    uint32_t tag;
-    uint32_t dma_len;
-    uint8_t *dma_buf;
-    uint32_t pending;
-    int out;
-    QTAILQ_ENTRY(lsi_request) next;
-} lsi_request;
-
-struct LSIState710 {
-    /*< private >*/
-    //PCIDevice parent_obj;
-    /*< public >*/
-
-    MemoryRegion mmio_io;
-    //MemoryRegion ram_io;
-    //MemoryRegion io_io;
-
-    int carry; /* ??? Should this be an a visible register somewhere?  */
-    int status;
-    /* Action to take at the end of a MSG IN phase.
-       0 = COMMAND, 1 = disconnect, 2 = DATA OUT, 3 = DATA IN.  */
-    int msg_action;
-    int msg_len;
-    uint8_t msg[LSI_MAX_MSGIN_LEN];
-    /* 0 if SCRIPTS are running or stopped.
-     * 1 if a Wait Reselect instruction has been issued.
-     * 2 if processing DMA from lsi_execute_script.
-     * 3 if a DMA operation is in progress.  */
-    int waiting;
-    SCSIBus bus;
-    int current_lun;
-    /* The tag is a combination of the device ID and the SCSI tag.  */
-    uint32_t select_tag;
-    int command_complete;
-    QTAILQ_HEAD(, lsi_request) queue;
-    lsi_request *current;
-
-    uint32_t dsa;
-    uint32_t temp;
-    uint32_t dnad;
-    uint32_t dbc;
-    uint8_t istat;
-    uint8_t dcmd;
-    uint8_t dstat;
-    uint8_t dien;
-//    uint8_t sist0;
-//    uint8_t sist1;
-    uint8_t sien0;
-    uint8_t ctest2;
-    uint8_t ctest3;
-    uint8_t ctest4;
-    uint8_t ctest5;
-    uint32_t dsp;
-    uint32_t dsps;
-    uint8_t dmode;
-    uint8_t dcntl;
-    uint8_t scntl0;
-    uint8_t scntl1;
-    uint8_t sstat0;
-    uint8_t sstat1;
-    uint8_t scid;
-    uint8_t sxfer;
-    uint8_t socl;
-    uint8_t sdid;
-    uint8_t sfbr;
-    uint8_t sidl;
-    uint32_t sbc;
-    uint32_t scratch;
-    uint8_t sbr;
-
-	uint8_t ctest0;
-	uint8_t ctest1;
-	uint8_t ctest6;
-	uint8_t ctest7;
-	uint8_t ctest8;
-	uint8_t lcrc;
-	uint8_t sstat2;
-	uint8_t dwt;
-	uint8_t sbcl;
-	uint8_t script_active;
-};
 
 #define TYPE_LSI53C810  "lsi53c810"
 #define TYPE_LSI53C895A "lsi53c895a"
@@ -287,7 +201,6 @@ static inline int lsi_irq_on_rsl(LSIState710 *s)
 // HELGE
 #define pci710_dma_read         pci_dma_read
 #define pci710_dma_write        pci_dma_write
-#define pci710_set_irq          pci_set_irq
 #define scsi710_req_get_buf     scsi_req_get_buf
 #define scsi710_req_continue    scsi_req_continue
 #define scsi710_req_unref       scsi_req_unref
@@ -385,7 +298,6 @@ static void lsi_stop_script(LSIState710 *s)
 
 static void lsi_update_irq(LSIState710 *s)
 {
-    PCIDevice *d = PCI_DEVICE(s);
     int level;
     static int last_level;
     lsi_request *p;
@@ -415,7 +327,7 @@ static void lsi_update_irq(LSIState710 *s)
                 level, s->dstat, s->sstat0, s->sstat1);
         last_level = level;
     }
-    pci710_set_irq(d, level);
+    qemu_set_irq(s->irq, level);
 
     if (!level && lsi_irq_on_rsl(s) && !(s->scntl1 & LSI_SCNTL1_CON)) {
         DPRINTF("Handled IRQs & disconnected, looking for pending "
@@ -436,7 +348,7 @@ static void lsi_script_scsi_interrupt(LSIState710 *s, int stat0)
     //uint32_t mask1;
 
     DPRINTF("SCSI Interrupt 0x%02x%02x prev 0x%02x%02x\n",
-            stat0, s->sstat0);
+            stat0, s->sstat0, 0,0);
     s->sstat0 |= stat0;
     //s->sist1 |= stat1;
     /* Stop processor on fatal or unmasked interrupt.  As a special hack

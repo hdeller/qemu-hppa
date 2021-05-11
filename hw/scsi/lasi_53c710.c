@@ -30,12 +30,14 @@ static void lasi_53c710_mem_write(void *opaque, hwaddr addr,
     // SysBus53C710State *d = opaque;
 
     // trace_lasi_53c710_mem_writew(addr, val);
+fprintf(stderr, "LASI WRITE %#lx  size=%d  val=%ld\n", addr - 0x100, size, val);
     switch (addr) {
     case PA_53C710_RESET:
         // lasi_53c710_h_reset(&d->state);
+        fprintf(stderr, "LASI WRITE RESET\n");
         break;
     case 0x100 ... 0x13b:
-        lsi710_mmio_write(opaque, addr, val, size);
+        lsi710_mmio_write(opaque, addr - 0x100, val, size);
         break;
     default:
         break; // XXX
@@ -46,10 +48,21 @@ static uint64_t lasi_53c710_mem_read(void *opaque, hwaddr addr,
                                unsigned size)
 {
     // SysBus53C710State *d = opaque;
-    uint32_t val;
+    uint32_t val = 0;
 
-    val = lsi710_mmio_read(opaque, addr, size);
+fprintf(stderr, "LASI READ %#lx  size=%d  ", addr - 0x100, size);
+    switch (addr) {
+    case PA_53C710_RESET:
+        fprintf(stderr, "LASI WRITE RESET\n");
+        break;
+    case 0x100 ... 0x13b:
+        val = lsi710_mmio_read(opaque, addr, size);
+        break;
+    default:
+        break; // XXX
+    }
     // trace_lasi_53c710_mem_readw(addr, val);
+    fprintf(stderr, "  - VAL = %d\n", val);
     return val;
 
 }
