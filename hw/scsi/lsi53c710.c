@@ -30,11 +30,11 @@
 #include "qom/object.h"
 
 #define DEBUG_LSI
-#define DEBUG_LSI_REG
+// #define DEBUG_LSI_REG
 
 #ifdef DEBUG_LSI
-#define DPRINTF(...) \
-do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: " __VA_ARGS__); } while (0)
+// #define DPRINTF(...) do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: " __VA_ARGS__); } while (0)
+#define DPRINTF(...) do { fprintf(stderr, "lsi_scsi: " __VA_ARGS__); } while (0)
 #define BADF(fmt, ...) \
 do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: error: " fmt , ## __VA_ARGS__); } while (0)
 #else
@@ -305,6 +305,7 @@ static void lsi_update_irq(LSIState710 *s)
                 level, s->dstat, s->sstat0, s->sstat1);
         last_level = level;
     }
+    DPRINTF("LSI 53c710 IRQ\n");
     qemu_set_irq(s->irq, level);
 
     if (!level && lsi_irq_on_rsl(s) && !(s->scntl1 & LSI_SCNTL1_CON)) {
@@ -920,6 +921,8 @@ static void lsi_execute_script(LSIState710 *s)
     int opcode;
     int insn_processed = 0;
 
+fprintf(stderr, "SCRIPT SCRIPT HELGE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+
     s->script_active = 1;
 again:
     insn_processed++;
@@ -1359,6 +1362,71 @@ again:
     DPRINTF("SCRIPTS execution stopped\n");
 }
 
+#define CASE_GET_REG24(name, addr) \
+    [addr+0] #name "0", \
+    [addr+1] #name "1", \
+    [addr+2] #name "2",
+
+#define CASE_GET_REG32(name, addr) \
+    [addr+0] #name "0", \
+    [addr+1] #name "1", \
+    [addr+2] #name "2", \
+    [addr+3] #name "3",
+
+static const char * const lsi_name[0x40] = {
+    [0x00] "SCNTL0",
+    [0x01] "SCNTL1",
+    [0x02] "SDID",
+    [0x03] "SIEN",
+    [0x04] "SCID",
+    [0x05] "SXFER",
+    [0x06] "SODL",
+    [0x07] "SOCL",
+    [0x08] "SFBR",
+    [0x09] "SIDL",
+    [0x0a] "SBDL",
+    [0x0b] "SBCL",
+    [0x0c] "DSTAT",
+    [0x0d] "SSTAT0",
+    [0x0e] "SSTAT1",
+    [0x0f] "SSTAT2",
+    CASE_GET_REG32(dsa, 0x10)
+    [0x14] "CTEST0",
+    [0x15] "CTEST1",
+    [0x16] "CTEST2",
+    [0x17] "CTEST3",
+    [0x18] "CTEST4",
+    [0x19] "CTEST5",
+    [0x1a] "CTEST6",
+    [0x1b] "CTEST7",
+    CASE_GET_REG32(temp, 0x1c)
+    [0x20] "DFIFO",
+    [0x21] "ISTAT",
+    [0x22] "CTEST8",
+    [0x23] "LCRC/CTEST9",
+    CASE_GET_REG24(dbc, 0x24)
+    [0x27] "DCMD",
+    CASE_GET_REG32(dnad, 0x28)
+    CASE_GET_REG32(dsp, 0x2c)
+    CASE_GET_REG32(dsps, 0x30)
+    CASE_GET_REG32(scratch, 0x34)
+    [0x38] "DMODE",
+    [0x39] "DIEN",
+    [0x3a] "DWT",
+    [0x3b] "DCNTL",
+};
+#undef CASE_GET_REG24
+#undef CASE_GET_REG32
+
+const char *lsi_regname(uint32_t reg) {
+    const char *name = NULL;
+
+    if (reg < ARRAY_SIZE(lsi_name))
+        name = lsi_name[reg];
+
+    return name ? name : "unknown";
+}
+
 static uint8_t lsi_reg_readb2(LSIState710 *s, int offset)
 {
     uint8_t tmp;
@@ -1503,7 +1571,7 @@ static void lsi_reg_writeb(LSIState710 *s, int offset, uint8_t val)
     case addr + 3: s->name &= 0x00ffffff; s->name |= val << 24; break;
 
 #ifdef DEBUG_LSI_REG
-    DPRINTF("Write reg %x = %02x\n", offset, val);
+    DPRINTF("Write reg %x(%s) = %02x\n", offset, lsi_regname(offset), val);
 #endif
     switch (offset) {
     case 0x00: /* SCNTL0 */

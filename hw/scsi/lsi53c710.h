@@ -110,6 +110,8 @@ void i53c710_set_link_status(NetClientState *nc);
 void i53c710_common_init(DeviceState *dev, LSI_53C710State *s);
 extern const VMStateDescription vmstate_i53c710;
 
+extern const char *lsi_regname(uint32_t reg);
+
 extern void lsi710_scsi_init(DeviceState *dev);
 extern void lsi710_scsi_reset(DeviceState *dev);
 
