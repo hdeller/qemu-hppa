@@ -24,6 +24,23 @@
 
 #define PA_53C710_RESET         0       /* Offsets relative to LASI-SCSI-Addr.*/
 
+static void write_4(void *opaque, hwaddr addr, uint64_t val)
+{
+    addr ^= 0x03;
+#if 0
+    lsi710_mmio_write(opaque, addr + 0, (val >> 24) & 0xff, 1);
+    lsi710_mmio_write(opaque, addr + 1, (val >> 16) & 0xff, 1);
+    lsi710_mmio_write(opaque, addr + 2, (val >>  8) & 0xff, 1);
+    lsi710_mmio_write(opaque, addr + 3, (val >>  0) & 0xff, 1);
+#else
+    /* big endian mode */
+    lsi710_mmio_write(opaque, addr + 0, (val >>  0) & 0xff, 1);
+    lsi710_mmio_write(opaque, addr + 1, (val >>  8) & 0xff, 1);
+    lsi710_mmio_write(opaque, addr + 2, (val >> 16) & 0xff, 1);
+    lsi710_mmio_write(opaque, addr + 3, (val >> 24) & 0xff, 1);
+#endif
+}
+
 static void lasi_53c710_mem_write(void *opaque, hwaddr addr,
                             uint64_t val, unsigned size)
 {
@@ -38,8 +55,11 @@ static void lasi_53c710_mem_write(void *opaque, hwaddr addr,
     case 0x100 ... 0x13b:
         addr -= 0x100;
         addr ^= 0x03;
-        fprintf(stderr, "LASI WRITE %#02lx %s size=%d  val=%ld\n", addr, lsi_regname(addr), size, val);
-        lsi710_mmio_write(opaque, addr, val, size);
+        fprintf(stderr, "LASI WRITE %#02lx %s size=%d  val=%#02lx\n", addr, lsi_regname(addr), size, val);
+        if (size == 4)
+            write_4(opaque, addr, val);
+        else
+            lsi710_mmio_write(opaque, addr, val, size);
         break;
     default:
         break; // XXX
@@ -51,6 +71,9 @@ static uint64_t lasi_53c710_mem_read(void *opaque, hwaddr addr,
 {
     // SysBus53C710State *d = opaque;
     uint32_t val = 0;
+
+    if (size == 4)
+        abort();
 
     switch (addr) {
     case PA_53C710_RESET:
@@ -66,7 +89,7 @@ static uint64_t lasi_53c710_mem_read(void *opaque, hwaddr addr,
         break; // XXX
     }
     // trace_lasi_53c710_mem_readw(addr, val);
-    fprintf(stderr, "  - VAL = %d\n", val);
+    fprintf(stderr, "  - VAL = %#02x\n", val);
     return val;
 
 }
@@ -77,7 +100,7 @@ static const MemoryRegionOps lasi_53c710_mem_ops = {
     .endianness = DEVICE_BIG_ENDIAN,
     .valid = {
         .min_access_size = 1,
-        .max_access_size = 1,
+        .max_access_size = 4,
     },
 };
 
@@ -113,6 +136,7 @@ SysBus53C710State *lasi_53c710_init(MemoryRegion *addr_space,
 
     dev = qdev_new(TYPE_LASI_53C710);
     s = SYSBUS_53C710(dev);
+    // sysbus_init_irq(&s, &s->state.irq);
     s->state.irq = scsi_irq;
     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 

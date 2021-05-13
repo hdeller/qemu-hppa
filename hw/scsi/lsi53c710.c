@@ -266,7 +266,8 @@ static inline uint32_t read_dword(LSIState710 *s, uint32_t addr)
     uint32_t buf;
 
 	lsi710_dma_read(addr, &buf, 4);
-    return cpu_to_le32(buf);
+    // return cpu_to_le32(buf);
+    return be32_to_cpu(buf);
 }
 
 static void lsi_stop_script(LSIState710 *s)
@@ -301,12 +302,13 @@ static void lsi_update_irq(LSIState710 *s)
     }
 
     if (level != last_level) {
-        DPRINTF("Update IRQ level %d dstat %02x sist %02x%02x\n",
+        DPRINTF("Update IRQ level %d dstat %#02x sist %#02x %#02x\n",
                 level, s->dstat, s->sstat0, s->sstat1);
         last_level = level;
     }
     DPRINTF("LSI 53c710 IRQ\n");
-    qemu_set_irq(s->irq, level);
+    // qemu_set_irq(s->irq, level);
+    qemu_set_irq(s->irq, 1);
 
     if (!level && lsi_irq_on_rsl(s) && !(s->scntl1 & LSI_SCNTL1_CON)) {
         DPRINTF("Handled IRQs & disconnected, looking for pending "
@@ -326,8 +328,7 @@ static void lsi_script_scsi_interrupt(LSIState710 *s, int stat0)
     uint32_t mask0;
     //uint32_t mask1;
 
-    DPRINTF("SCSI Interrupt 0x%02x%02x prev 0x%02x%02x\n",
-            stat0, s->sstat0, 0,0);
+    DPRINTF("SCSI Interrupt %#02x %#02x\n", stat0, s->sstat0);
     s->sstat0 |= stat0;
     //s->sist1 |= stat1;
     /* Stop processor on fatal or unmasked interrupt.  As a special hack
@@ -345,7 +346,7 @@ static void lsi_script_scsi_interrupt(LSIState710 *s, int stat0)
 /* Stop SCRIPTS execution and raise a DMA interrupt.  */
 static void lsi_script_dma_interrupt(LSIState710 *s, int stat)
 {
-    DPRINTF("DMA Interrupt 0x%x prev 0x%x\n", stat, s->dstat);
+    DPRINTF("DMA Interrupt %#x prev %#x\n", stat, s->dstat);
     s->dstat |= stat;
     lsi_update_irq(s);
     lsi_stop_script(s);
@@ -455,7 +456,7 @@ static void lsi_queue_command(LSIState710 *s)
 {
     lsi_request *p = s->current;
 
-    DPRINTF("Queueing tag=0x%x\n", p->tag);
+    DPRINTF("Queueing tag=%#x\n", p->tag);
     assert(s->current != NULL);
     assert(s->current->dma_len == 0);
     QTAILQ_INSERT_TAIL(&s->queue, s->current, next);
@@ -471,7 +472,7 @@ static void lsi_add_msg_byte(LSIState710 *s, uint8_t data)
     if (s->msg_len >= LSI_MAX_MSGIN_LEN) {
         BADF("MSG IN data too long\n");
     } else {
-        DPRINTF("MSG IN 0x%02x\n", data);
+        DPRINTF("MSG IN %#02x\n", data);
         s->msg[s->msg_len++] = data;
     }
 }
@@ -562,7 +563,7 @@ static int lsi_queue_req(LSIState710 *s, SCSIRequest *req, uint32_t len)
         lsi_reselect(s, p);
         return 0;
     } else {
-        DPRINTF("Queueing IO tag=0x%x\n", p->tag);
+        DPRINTF("Queueing IO tag=%#x\n", p->tag);
         p->pending = len;
         return 1;
     }
@@ -611,7 +612,7 @@ void lsi710_transfer_data(SCSIRequest *req, uint32_t len)
     out = (s->sstat2 & PHASE_MASK) == PHASE_DO;
 
     /* host adapter (re)connected */
-    DPRINTF("Data ready tag=0x%x len=%d\n", req->tag, len);
+    DPRINTF("Data ready tag=%#x len=%d\n", req->tag, len);
     s->current->dma_len = len;
     s->command_complete = 1;
     if (s->waiting) {
@@ -646,7 +647,7 @@ static void lsi_do_command(LSIState710 *s)
     if (s->dbc > 16)
         s->dbc = 16;
 	lsi710_dma_read(s->dnad, buf, s->dbc);
-    DPRINTF("Send command len=%d %02x.%02x.%02x.%02x.%02x.%02x\n", s->dbc, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
+    DPRINTF("Send command len=%d %#02x.%#02x.%#02x.%#02x.%#02x.%#02x\n", s->dbc, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
     s->sfbr = buf[0];
     s->command_complete = 0;
 
@@ -789,7 +790,7 @@ static void lsi_do_msgout(LSIState710 *s)
             len = lsi_get_msgbyte(s);
             msg = lsi_get_msgbyte(s);
             (void)len; /* avoid a warning about unused variable*/
-            DPRINTF("Extended message 0x%x (len %d)\n", msg, len);
+            DPRINTF("Extended message %#x (len %d)\n", msg, len);
             switch (msg) {
             case 1:
                 DPRINTF("SDTR (ignored)\n");
@@ -805,7 +806,7 @@ static void lsi_do_msgout(LSIState710 *s)
             break;
         case 0x20: /* SIMPLE queue */
             s->select_tag |= lsi_get_msgbyte(s) | LSI_TAG_VALID;
-            DPRINTF("SIMPLE queue tag=0x%x\n", s->select_tag & 0xff);
+            DPRINTF("SIMPLE queue tag=%#x\n", s->select_tag & 0xff);
             break;
         case 0x21: /* HEAD of queue */
             BADF("HEAD queue not implemented\n");
@@ -817,7 +818,7 @@ static void lsi_do_msgout(LSIState710 *s)
             break;
         case 0x0d:
             /* The ABORT TAG message clears the current I/O process only. */
-            DPRINTF("MSG: ABORT TAG tag=0x%x\n", current_tag);
+            DPRINTF("MSG: ABORT TAG tag=%#x\n", current_tag);
             if (current_req) {
 				scsi710_req_cancel(current_req->req);
             }
@@ -829,17 +830,17 @@ static void lsi_do_msgout(LSIState710 *s)
             /* The ABORT message clears all I/O processes for the selecting
                initiator on the specified logical unit of the target. */
             if (msg == 0x06) {
-                DPRINTF("MSG: ABORT tag=0x%x\n", current_tag);
+                DPRINTF("MSG: ABORT tag=%#x\n", current_tag);
             }
             /* The CLEAR QUEUE message clears all I/O processes for all
                initiators on the specified logical unit of the target. */
             if (msg == 0x0e) {
-                DPRINTF("MSG: CLEAR QUEUE tag=0x%x\n", current_tag);
+                DPRINTF("MSG: CLEAR QUEUE tag=%#x\n", current_tag);
             }
             /* The BUS DEVICE RESET message clears all I/O processes for all
                initiators on all logical units of the target. */
             if (msg == 0x0c) {
-                DPRINTF("MSG: BUS DEVICE RESET tag=0x%x\n", current_tag);
+                DPRINTF("MSG: BUS DEVICE RESET tag=%#x\n", current_tag);
             }
 
             /* clear the current I/O process */
@@ -886,7 +887,7 @@ static void lsi_memcpy(LSIState710 *s, uint32_t dest, uint32_t src, int count)
     int n;
     uint8_t buf[LSI_BUF_SIZE];
 
-    DPRINTF("memcpy dest 0x%08x src 0x%08x count %d\n", dest, src, count);
+    DPRINTF("memcpy dest %#08x src %#08x count %d\n", dest, src, count);
     while (count) {
         n = (count > LSI_BUF_SIZE) ? LSI_BUF_SIZE : count;
 		lsi710_dma_read(src, buf, n);
@@ -934,7 +935,7 @@ again:
         goto again;
     }
     addr = read_dword(s, s->dsp + 4);
-    DPRINTF("SCRIPTS dsp=%08x opcode %08x arg %08x\n", s->dsp, insn, addr);
+    DPRINTF("SCRIPTS dsp=%#08x opcode %#08x arg %#08x\n", s->dsp, insn, addr);
     s->dsps = addr;
     s->dcmd = insn >> 24;
     s->dsp += 8;
@@ -1328,13 +1329,13 @@ again:
             reg = (insn >> 16) & 0xff;
             if (insn & (1 << 24)) {
 				lsi710_dma_read(addr, data, n);
-                DPRINTF("Load reg 0x%x size %d addr 0x%08x = %08x\n", reg, n,
+                DPRINTF("Load reg %#x size %d addr %#08x = %#08x\n", reg, n,
                         addr, *(int *)data);
                 for (i = 0; i < n; i++) {
                     lsi_reg_writeb(s, reg + i, data[i]);
                 }
             } else {
-                DPRINTF("Store reg 0x%x size %d addr 0x%08x\n", reg, n, addr);
+                DPRINTF("Store reg %#x size %d addr %#08x\n", reg, n, addr);
                 for (i = 0; i < n; i++) {
                     data[i] = lsi_reg_readb(s, reg + i);
                 }
@@ -1540,7 +1541,7 @@ static uint8_t lsi_reg_readb(LSIState710 *s, int offset)
 {
 	uint8_t v = lsi_reg_readb2(s, offset);
 #ifdef DEBUG_LSI_REG
-    DPRINTF("Read reg %x: %02X\n", offset, v);
+    DPRINTF("Read reg %#x: %#02X\n", offset, v);
 #endif
 	return v;
 }
@@ -1571,7 +1572,7 @@ static void lsi_reg_writeb(LSIState710 *s, int offset, uint8_t val)
     case addr + 3: s->name &= 0x00ffffff; s->name |= val << 24; break;
 
 #ifdef DEBUG_LSI_REG
-    DPRINTF("Write reg %x(%s) = %02x\n", offset, lsi_regname(offset), val);
+    DPRINTF("Write reg %#x(%s) = %#02x\n", offset, lsi_regname(offset), val);
 #endif
     switch (offset) {
     case 0x00: /* SCNTL0 */
