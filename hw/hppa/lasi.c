@@ -263,6 +263,8 @@ static void lasi_set_irq(void *opaque, int irq, int level)
     LasiState *s = opaque;
     uint32_t bit = 1u << irq;
 
+// fprintf(stderr, "LASI lasi_set_irq(%d) HELGE\n", irq);
+
     if (level) {
         s->ipr |= bit;
         if (bit & s->imr) {

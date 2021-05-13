@@ -25,7 +25,7 @@ typedef struct LSIState710 LSI_53C710State;
 
 struct LSIState710 {
     /*< private >*/
-    //PCIDevice parent_obj;
+    // SysBusDevice parent_obj;
     /*< public >*/
 
     MemoryRegion mmio;
