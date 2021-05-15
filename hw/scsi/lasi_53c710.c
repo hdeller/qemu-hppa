@@ -74,7 +74,7 @@ static void lasi_53c710_mem_write(void *opaque, hwaddr addr,
     case 0x100 ... 0x13b:
         addr -= 0x100;
         addr ^= 0x03;
-        fprintf(stderr, "LASI WRITE %#02lx %s size=%d  val=%#02lx\n", addr, lsi_regname(addr), size, val);
+//        fprintf(stderr, "LASI WRITE %#02lx %s size=%d  val=%#02lx\n", addr, lsi_regname(addr), size, val);
         if (size == 4)
             write_4(opaque, addr, val);
         else
@@ -97,7 +97,7 @@ static uint64_t lasi_53c710_mem_read(void *opaque, hwaddr addr,
     case 0x100 ... 0x13b:
         addr -= 0x100;
         addr ^= 0x03;
-        fprintf(stderr, "LASI READ %#02lx %s size=%d  ", addr, lsi_regname(addr), size);
+//        fprintf(stderr, "LASI READ %#02lx %s size=%d  ", addr, lsi_regname(addr), size);
         if (size == 4)
             val = read_4(opaque, addr);
         else
@@ -107,7 +107,7 @@ static uint64_t lasi_53c710_mem_read(void *opaque, hwaddr addr,
         break; // XXX
     }
     // trace_lasi_53c710_mem_readw(addr, val);
-    fprintf(stderr, "  - VAL = %#02x\n", val);
+//    fprintf(stderr, "  - VAL = %#02x\n", val);
     return val;
 
 }
@@ -143,7 +143,7 @@ static void lasi_53c710_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->mmio, OBJECT(d), &lasi_53c710_mem_ops, s,
                 "lasi_53c710-mmio", 0x1000);
 
-    lsi710_common_init(dev, errp);
+    lsi710_common_init(s, errp);
 }
 
 SysBus53C710State *lasi_53c710_init(MemoryRegion *addr_space,

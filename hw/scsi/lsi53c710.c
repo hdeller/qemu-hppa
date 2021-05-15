@@ -1,5 +1,5 @@
 /*
- * QEMU LSI53C895A SCSI Host Bus Adapter emulation
+ * QEMU LSI53C710 SCSI Host Bus Adapter emulation
  *
  * Copyright (c) 2006 CodeSourcery.
  * Written by Paul Brook
@@ -29,7 +29,7 @@
 #include "trace.h"
 #include "qom/object.h"
 
-#define DEBUG_LSI
+// #define DEBUG_LSI
 // #define DEBUG_LSI_REG
 
 #ifdef DEBUG_LSI
@@ -186,11 +186,9 @@ do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: error: " fmt , ## __VA_ARGS__); a
 /* Flag set if this is a tagged command.  */
 #define LSI_TAG_VALID     (1 << 16)
 
+#define TYPE_LSI53C710  "lsi53c710"
 
-#define TYPE_LSI53C810  "lsi53c810"
-#define TYPE_LSI53C895A "lsi53c895a"
-
-OBJECT_DECLARE_SIMPLE_TYPE(LSIState710, LSI53C895A)
+OBJECT_DECLARE_SIMPLE_TYPE(LSIState710, LSI53C710)
 
 static inline int lsi_irq_on_rsl(LSIState710 *s)
 {
@@ -487,7 +485,7 @@ static void lsi_reselect(LSIState710 *s, lsi_request *p)
     s->current = p;
 
     id = (p->tag >> 8) & 0xf;
-    /* LSI53C700 Family Compatibility, see LSI53C895A 4-73 */
+    /* LSI53C700 Family Compatibility, see LSI53C710 4-73 */
     if (!(s->dcntl & LSI_DCNTL_COM)) {
         s->sfbr = 1 << (id & 0x7);
     }
@@ -533,7 +531,7 @@ static void lsi_request_free(LSIState710 *s, lsi_request *p)
 
 void lsi710_request_cancelled(SCSIRequest *req)
 {
-    LSIState710 *s = LSI53C895A(req->bus->qbus.parent);
+    LSIState710 *s = LSI53C710(req->bus->qbus.parent);
     lsi_request *p = (lsi_request*)req->hba_private;
 
     req->hba_private = NULL;
@@ -572,7 +570,7 @@ static int lsi_queue_req(LSIState710 *s, SCSIRequest *req, uint32_t len)
  /* Callback to indicate that the SCSI layer has completed a command.  */
 void lsi710_command_complete(SCSIRequest *req, uint32_t status, size_t resid)
 {
-    LSIState710 *s = LSI53C895A(req->bus->qbus.parent);
+    LSIState710 *s = LSI53C710(req->bus->qbus.parent);
     int out;
 
     out = (s->sstat2 & PHASE_MASK) == PHASE_DO;
@@ -598,7 +596,7 @@ void lsi710_command_complete(SCSIRequest *req, uint32_t status, size_t resid)
  /* Callback to indicate that the SCSI layer has completed a transfer.  */
 void lsi710_transfer_data(SCSIRequest *req, uint32_t len)
 {
-    LSIState710 *s = LSI53C895A(req->bus->qbus.parent);
+    LSIState710 *s = LSI53C710(req->bus->qbus.parent);
     int out;
 
     assert(req->hba_private);
@@ -921,8 +919,6 @@ static void lsi_execute_script(LSIState710 *s)
     uint32_t addr;
     int opcode;
     int insn_processed = 0;
-
-fprintf(stderr, "SCRIPT SCRIPT HELGE !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
 
     s->script_active = 1;
 again:
@@ -1769,9 +1765,9 @@ static const MemoryRegionOps lsi_ram_ops = {
 
 #endif
 
-void lsi710_scsi_reset(DeviceState *dev)
+void lsi710_scsi_reset(LSI_53C710State *dev)
 {
-    LSIState710 *s = LSI53C895A(dev);
+    LSIState710 *s = LSI53C710(dev);
 
 	memset (s, 0, sizeof(LSIState710));
     lsi710_soft_reset(s);
@@ -1874,7 +1870,7 @@ static const VMStateDescription vmstate_lsi_scsi = {
 
 static void lsi_scsi_uninit(PCIDevice *d)
 {
-    LSIState710 *s = LSI53C895A(d);
+    LSIState710 *s = LSI53C710(d);
 
     memory_region_destroy(&s->mmio_io);
     memory_region_destroy(&s->ram_io);
@@ -1892,15 +1888,15 @@ static const struct SCSIBusInfo lsi_scsi_info = {
     .cancel = lsi710_request_cancelled
 };
 
-int lsi710_common_init(DeviceState *dev, Error **errp)
+int lsi710_common_init(LSI_53C710State *dev, Error **errp)
 {
-    LSIState710 *s = LSI53C895A(dev);
-    DeviceState *d = DEVICE(dev);
+    LSIState710 *s = dev;
+    DeviceState *ds = DEVICE(dev);
 
     // memory_region_init_io(&s->mmio_io, OBJECT(s), &lsi_mmio_ops, s, "lsi-mmio", 256);
     QTAILQ_INIT(&s->queue);
 
-    scsi_bus_new(&s->bus, sizeof(s->bus), d, &lsi_scsi_info, NULL);
+    scsi_bus_new(&s->bus, sizeof(s->bus), ds, &lsi_scsi_info, NULL);
     scsi_bus_legacy_handle_cmdline(&s->bus);
 
     return 0;

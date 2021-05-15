@@ -18,7 +18,7 @@ DECLARE_INSTANCE_CHECKER(SysBus53C710State, SYSBUS_53C710,
                          TYPE_LASI_53C710)
 
 struct SysBus53C710State {
-    SysBusDevice parent_obj;
+//    SysBusDevice parent_obj;
 
     LSI_53C710State state;
 };
