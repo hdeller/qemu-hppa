@@ -29,8 +29,8 @@
 #include "trace.h"
 #include "qom/object.h"
 
-// #define DEBUG_LSI
-// #define DEBUG_LSI_REG
+ #define DEBUG_LSI
+ #define DEBUG_LSI_REG
 
 #ifdef DEBUG_LSI
 // #define DPRINTF(...) do { qemu_log_mask(LOG_GUEST_ERROR, "lsi_scsi: " __VA_ARGS__); } while (0)
@@ -251,6 +251,7 @@ static void lsi710_soft_reset(LSIState710 *s)
     s->sbc = 0;
     s->sbr = 0;
     assert(QTAILQ_EMPTY(&s->queue));
+    // QTAILQ_INIT(&s->queue);
     assert(!s->current);
 }
 
@@ -306,7 +307,7 @@ static void lsi_update_irq(LSIState710 *s)
     }
     DPRINTF("LSI 53c710 IRQ\n");
     // qemu_set_irq(s->irq, level);
-    qemu_set_irq(s->irq, 1);
+    qemu_set_irq(s->irq, level);
 
     if (!level && lsi_irq_on_rsl(s) && !(s->scntl1 & LSI_SCNTL1_CON)) {
         DPRINTF("Handled IRQs & disconnected, looking for pending "
@@ -1537,7 +1538,7 @@ static uint8_t lsi_reg_readb(LSIState710 *s, int offset)
 {
 	uint8_t v = lsi_reg_readb2(s, offset);
 #ifdef DEBUG_LSI_REG
-    DPRINTF("Read reg %#x: %#02X\n", offset, v);
+    DPRINTF("Read reg %#x(%s) = %#02x\n", offset, lsi_regname(offset), v);
 #endif
 	return v;
 }

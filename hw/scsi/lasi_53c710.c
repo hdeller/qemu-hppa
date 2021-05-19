@@ -92,7 +92,8 @@ static uint64_t lasi_53c710_mem_read(void *opaque, hwaddr addr,
 
     switch (addr) {
     case PA_53C710_RESET:
-        fprintf(stderr, "LASI WRITE RESET\n");
+        fprintf(stderr, "LASI READ DETECT\n");
+        val = 1; // this is how SeaBIOS detects this SCSI port
         break;
     case 0x100 ... 0x13b:
         addr -= 0x100;
