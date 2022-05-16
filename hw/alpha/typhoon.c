@@ -14,6 +14,7 @@
 #include "hw/irq.h"
 #include "alpha_sys.h"
 #include "qom/object.h"
+#include "trace.h"
 
 
 #define TYPE_TYPHOON_PCI_HOST_BRIDGE "typhoon-pcihost"
@@ -80,6 +81,7 @@ static MemTxResult cchip_read(void *opaque, hwaddr addr,
     TyphoonState *s = opaque;
     uint64_t ret = 0;
 
+    trace_typhoon_cchip_read(addr, size);
     switch (addr) {
     case 0x0000:
         /* CSC: Cchip System Configuration Register.  */
@@ -214,6 +216,7 @@ static MemTxResult pchip_read(void *opaque, hwaddr addr, uint64_t *data,
     TyphoonState *s = opaque;
     uint64_t ret = 0;
 
+    trace_typhoon_pchip_read(addr, size);
     switch (addr) {
     case 0x0000:
         /* WSBA0: Window Space Base Address Register.  */
@@ -308,6 +311,7 @@ static MemTxResult cchip_write(void *opaque, hwaddr addr,
     TyphoonState *s = opaque;
     uint64_t oldval, newval;
 
+    trace_typhoon_cchip_write(addr, size, val);
     switch (addr) {
     case 0x0000:
         /* CSC: Cchip System Configuration Register.  */
@@ -466,6 +470,7 @@ static MemTxResult pchip_write(void *opaque, hwaddr addr,
     TyphoonState *s = opaque;
     uint64_t oldval;
 
+    trace_typhoon_pchip_write(addr, size, val);
     switch (addr) {
     case 0x0000:
         /* WSBA0: Window Space Base Address Register.  */

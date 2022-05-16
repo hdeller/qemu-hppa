@@ -175,9 +175,11 @@ static void clipper_init(MachineState *machine)
         }
 
         cpus[0]->env.trap_arg1 = kernel_entry;
+fprintf(stderr, "KERNEL LOW = %lx\n", kernel_low);
 
         param_offset = kernel_low - 0x6000;
 
+fprintf(stderr, "PARAM OFFS = %lx\n", param_offset);
         if (kernel_cmdline) {
             pstrcpy_targphys("cmdline", param_offset, 0x100, kernel_cmdline);
         }
@@ -195,6 +197,7 @@ static void clipper_init(MachineState *machine)
 
             /* Put the initrd image as high in memory as possible.  */
             initrd_base = (ram_size - initrd_size) & TARGET_PAGE_MASK;
+fprintf(stderr, "initrd base = %lx\n", initrd_base);
             load_image_targphys(initrd_filename, initrd_base,
                                 ram_size - initrd_base);
 

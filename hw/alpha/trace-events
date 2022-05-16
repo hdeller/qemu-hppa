@@ -2,3 +2,13 @@
 
 # pci.c
 alpha_pci_iack_write(void) ""
+
+# artist_reg_read(unsigned int size, uint64_t addr, const char *name, uint64_t val) "%u 0x%"PRIx64 "%s -> 0x%08"PRIx64
+typhoon_conf_read(unsigned long addr, unsigned size) "0x%lx %x"
+typhoon_conf_write(unsigned long addr, unsigned size, unsigned val) "0x%lx %x -> 0x%x"
+
+typhoon_cchip_read(unsigned long addr, unsigned size) "0x%lx %x"
+typhoon_pchip_read(unsigned long addr, unsigned size) "0x%lx %x"
+typhoon_cchip_write(unsigned long addr, unsigned size, unsigned val) "0x%lx %x -> 0x%x"
+typhoon_pchip_write(unsigned long addr, unsigned size, unsigned val) "0x%lx %x -> 0x%x"
+
