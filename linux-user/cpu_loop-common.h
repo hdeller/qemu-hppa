@@ -23,6 +23,7 @@
 #include "exec/log.h"
 #include "special-errno.h"
 
+extern int open_self_maps(CPUArchState *cpu_env, int fd);
 #define EXCP_DUMP(env, fmt, ...)                                        \
 do {                                                                    \
     CPUState *cs = env_cpu(env);                                        \

@@ -153,6 +153,8 @@ void cpu_loop(CPUHPPAState *env)
         case EXCP_PRIV_OPR:
             /* check for glibc ABORT_INSTRUCTION "iitlbp %r0,(%sr0, %r0)" */
             if (env->cr[CR_IIR] == 0x04000000) {
+		    EXCP_DUMP(env, "qemu: ABORT_INSTRUCTION iitlbp\n");
+		    open_self_maps(env, fileno(stderr));
 		    force_sig_fault(TARGET_SIGILL, TARGET_ILL_ILLOPC, env->iaoq_f);
             } else {
 		    EXCP_DUMP(env, "qemu: CPU exception %#x\n", trapnr);
