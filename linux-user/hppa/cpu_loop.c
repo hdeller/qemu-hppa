@@ -142,7 +142,7 @@ void cpu_loop(CPUHPPAState *env)
             /* We arrived here by faking the gateway page.  Return.  */
             env->iaoq_f = env->gr[31];
             env->iaoq_b = env->gr[31] + 4;
-            break;
+            continue;   /* do not process signals after atomic operations */
         case EXCP_IMP:
             force_sig_fault(TARGET_SIGSEGV, TARGET_SEGV_MAPERR, env->iaoq_f);
             break;
