@@ -9779,7 +9779,10 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
 #endif
     case TARGET_NR_rt_sigreturn:
         if (block_signals()) {
+            /* IMPORTANT: DO NOT return RESTARTSYS here - it's not handled by trampoline handler */
+#if 0
             return -QEMU_ERESTARTSYS;
+#endif
         }
         return do_rt_sigreturn(cpu_env);
     case TARGET_NR_sethostname:

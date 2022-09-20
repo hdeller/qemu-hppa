@@ -23,6 +23,38 @@
 #include "cpu_loop-common.h"
 #include "signal-common.h"
 
+/*
+ * Similar to code in accel/tcg/user-exec.c, but outside the execution loop.
+ * Must be called with mmap_lock.
+ * We get the PC of the entry address - which is as good as anything,
+ * on a real kernel what you get depends on which mode it uses.
+ */
+static void *atomic_mmu_lookup(CPUArchState *env, abi_ulong addr, int size, abi_ulong *err)
+{
+    int need_flags = PAGE_READ | PAGE_WRITE_ORG | PAGE_VALID;
+    int page_flags;
+
+    /* Enforce guest required alignment.  */
+    if (unlikely(addr & (size - 1))) {
+        *err = -TARGET_EFAULT;
+        return NULL;
+    }
+
+    page_flags = page_get_flags(addr);
+    if (unlikely((page_flags & need_flags) != need_flags)) {
+fprintf(stderr, "QEMU:  *******  hppa_lws() accessed unmapped memory. SENDING SIGSEGV,\n");
+        force_sig_fault(TARGET_SIGSEGV,
+                        page_flags & PAGE_VALID ?
+                        TARGET_SEGV_ACCERR : TARGET_SEGV_MAPERR, addr);
+        *err = -EAGAIN;
+        return NULL;
+    }
+
+    return g2h(env_cpu(env), addr);
+}
+
+
+
 static abi_ulong hppa_lws(CPUHPPAState *env)
 {
     CPUState *cs = env_cpu(env);
@@ -32,6 +64,7 @@ static abi_ulong hppa_lws(CPUHPPAState *env)
     abi_ulong new = env->gr[24];
     abi_ulong size, ret;
 
+
     switch (which) {
     default:
         return -TARGET_ENOSYS;
@@ -40,9 +73,44 @@ static abi_ulong hppa_lws(CPUHPPAState *env)
         if ((addr & 3) || !access_ok(cs, VERIFY_WRITE, addr, 4)) {
             return -TARGET_EFAULT;
         }
+#if 0
+                Implementing 32bit CAS as an atomic operation:
+        
+                %r26 - Address to examine
+                %r25 - Old value to check (old)
+                %r24 - New value to set (new)
+                %r28 - Return prev through this register.
+                %r21 - Kernel error code
+        
+                %r21 returns the following error codes:
+                EAGAIN - CAS is busy, ldcw failed, try again.
+                EFAULT - Read or write failed.          
+
+                If EAGAIN is returned, %r28 indicates the busy reason:
+                r28 == 1 - CAS is busy. lock contended.
+                r28 == 2 - CAS is busy. ldcw failed.
+                r28 == 3 - CAS is busy. page fault.
+
+                Scratch: r20, r28, r1
+#endif
         old = tswap32(old);
         new = tswap32(new);
+#if 0
         ret = qatomic_cmpxchg((uint32_t *)g2h(cs, addr), old, new);
+        if (0)
+            atomic_mmu_lookup(env, 0, 4);
+#else
+        mmap_lock();
+        uint32_t *host_addr;
+        host_addr = atomic_mmu_lookup(env, addr, 4, &ret);
+        if (!host_addr) {
+            mmap_unlock();
+            env->gr[28] = 0x999;
+            return ret;
+        }
+        ret = qatomic_cmpxchg(host_addr, old, new);
+        mmap_unlock();
+#endif
         ret = tswap32(ret);
         break;
 
@@ -138,10 +206,12 @@ void cpu_loop(CPUHPPAState *env)
             }
             break;
         case EXCP_SYSCALL_LWS:
+            // block_signals();
             env->gr[21] = hppa_lws(env);
             /* We arrived here by faking the gateway page.  Return.  */
             env->iaoq_f = env->gr[31];
             env->iaoq_b = env->gr[31] + 4;
+            // continue;   /* do not process signals after atomic operations */
             continue;   /* do not process signals after atomic operations */
         case EXCP_IMP:
             force_sig_fault(TARGET_SIGSEGV, TARGET_SEGV_MAPERR, env->iaoq_f);
