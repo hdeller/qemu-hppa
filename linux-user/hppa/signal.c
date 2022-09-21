@@ -54,7 +54,7 @@ static void setup_sigcontext(struct target_sigcontext *sc, CPUArchState *env)
 
     /* ??? if on_sig_stack, flags |= 1 (PARISC_SC_FLAG_ONSTACK).  */
 
-    if (env->iaoq_f < TARGET_PAGE_SIZE) {
+    if (0 && env->iaoq_f < TARGET_PAGE_SIZE) {
         /* In the gateway page, executing a syscall.  */
         flags |= 2; /* PARISC_SC_FLAG_IN_SYSCALL */
         __put_user(env->gr[31], &sc->sc_iaoq[0]);
