@@ -218,6 +218,7 @@ void cpu_loop(CPUHPPAState *env)
             break;
         case EXCP_ILL:
             EXCP_DUMP(env, "qemu: CPU exception %#x\n", trapnr);
+            open_self_maps(env, fileno(stderr));
             force_sig_fault(TARGET_SIGILL, TARGET_ILL_ILLOPC, env->iaoq_f);
             break;
         case EXCP_PRIV_OPR:
@@ -233,6 +234,7 @@ void cpu_loop(CPUHPPAState *env)
             break;
         case EXCP_PRIV_REG:
             EXCP_DUMP(env, "qemu: CPU exception %#x\n", trapnr);
+            open_self_maps(env, fileno(stderr));
             force_sig_fault(TARGET_SIGILL, TARGET_ILL_PRVREG, env->iaoq_f);
             break;
         case EXCP_OVERFLOW:
