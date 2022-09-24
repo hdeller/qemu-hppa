@@ -1568,7 +1568,12 @@ static bool do_load(DisasContext *ctx, unsigned rt, unsigned rb,
         /* Make sure if RT == RB, we see the result of the load.  */
         dest = get_temp(ctx);
     }
-    do_load_reg(ctx, dest, rb, rx, scale, disp, sp, modify, mop);
+    if (unlikely(TARGET_REGISTER_BITS == 32 && (mop & MO_SIZE) > MO_32)) {
+        gen_illegal(ctx);
+        dest = tcg_constant_reg(0);
+    } else {
+        do_load_reg(ctx, dest, rb, rx, scale, disp, sp, modify, mop);
+    }
     save_gpr(ctx, rt, dest);
 
     return nullify_end(ctx);
@@ -1631,7 +1636,11 @@ static bool do_store(DisasContext *ctx, unsigned rt, unsigned rb,
                      int modify, MemOp mop)
 {
     nullify_over(ctx);
-    do_store_reg(ctx, load_gpr(ctx, rt), rb, 0, 0, disp, sp, modify, mop);
+    if (unlikely(TARGET_REGISTER_BITS == 32 && (mop & MO_SIZE) > MO_32)) {
+        gen_illegal(ctx);
+    } else {
+        do_store_reg(ctx, load_gpr(ctx, rt), rb, 0, 0, disp, sp, modify, mop);
+    }
     return nullify_end(ctx);
 }
 
