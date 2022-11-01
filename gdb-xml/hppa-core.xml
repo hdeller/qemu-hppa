@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<!-- Copyright (C) 2022 Free Software Foundation, Inc.
+
+     Copying and distribution of this file, with or without modification,
+     are permitted in any medium without royalty provided the copyright
+     notice and this notice are preserved.  -->
+<!DOCTYPE target SYSTEM "gdb-target.dtd">
+<feature name="org.gnu.gdb.hppa.core">
+  <reg name="psw" bitsize="32"/>
+  <reg name="gr1" bitsize="32"/>
+  <reg name="gr2" bitsize="32"/>
+  <reg name="gr3" bitsize="32"/>
+  <reg name="gr4" bitsize="32"/>
+  <reg name="gr5" bitsize="32"/>
+  <reg name="gr6" bitsize="32"/>
+  <reg name="gr7" bitsize="32"/>
+  <reg name="gr8" bitsize="32"/>
+  <reg name="gr9" bitsize="32"/>
+  <reg name="gr10" bitsize="32"/>
+  <reg name="gr11" bitsize="32"/>
+  <reg name="gr12" bitsize="32"/>
+  <reg name="gr13" bitsize="32"/>
+  <reg name="gr14" bitsize="32"/>
+  <reg name="gr15" bitsize="32"/>
+  <reg name="gr16" bitsize="32"/>
+  <reg name="gr17" bitsize="32"/>
+  <reg name="gr18" bitsize="32"/>
+  <reg name="gr19" bitsize="32"/>
+  <reg name="gr20" bitsize="32"/>
+  <reg name="gr21" bitsize="32"/>
+  <reg name="gr22" bitsize="32"/>
+  <reg name="gr23" bitsize="32"/>
+  <reg name="gr24" bitsize="32"/>
+  <reg name="gr25" bitsize="32"/>
+  <reg name="gr26" bitsize="32"/>
+  <reg name="gr27" bitsize="32"/>
+  <reg name="gr28" bitsize="32"/>
+  <reg name="gr29" bitsize="32"/>
+  <reg name="gr30" bitsize="32"/>
+  <reg name="gr31" bitsize="32"/>
+  <reg name="sar"  bitsize="32"/>
+  <reg name="iaoq_f" bitsize="32" regnum="33"/>
+  <reg name="iasq_f_hi" bitsize="32"/>
+  <reg name="iaoq_b" bitsize="32"/>
+  <reg name="iaoq_b_hi" bitsize="32"/>
+  <reg name="eiem" bitsize="32"/>
+  <reg name="iir" bitsize="32"/>
+  <reg name="isr" bitsize="32"/>
+  <reg name="ior" bitsize="32"/>
+  <reg name="ipsw" bitsize="32"/>
+  <reg name="sr4_hi" bitsize="32"/>
+  <reg name="sr0_hi" bitsize="32"/>
+  <reg name="sr1_hi" bitsize="32"/>
+  <reg name="sr2_hi" bitsize="32"/>
+  <reg name="sr3_hi" bitsize="32"/>
+  <reg name="sr5_hi" bitsize="32"/>
+  <reg name="sr6_hi" bitsize="32"/>
+  <reg name="sr7_hi" bitsize="32"/>
+  <reg name="cr_rc" bitsize="32"/>
+  <reg name="cr_pid1" bitsize="32"/>
+  <reg name="cr_pid2" bitsize="32"/>
+  <reg name="cr_scrccr" bitsize="32"/>
+  <reg name="cr_pid3" bitsize="32"/>
+  <reg name="cr_pid4" bitsize="32"/>
+  <reg name="cr_24" bitsize="32"/>
+  <reg name="cr_25" bitsize="32"/>
+  <reg name="cr_26" bitsize="32"/>
+  <reg name="cr_27" bitsize="32"/>
+  <reg name="cr_28" bitsize="32"/>
+  <reg name="cr_29" bitsize="32"/>
+  <reg name="cr_30" bitsize="32"/>
+  <reg name="fr0"   bitsize="64" type="ieee_double" regnum="64"/>
+  <reg name="fr1"   bitsize="64" type="ieee_double"/>
+  <reg name="fr2"   bitsize="64" type="ieee_double"/>
+  <reg name="fr3"   bitsize="64" type="ieee_double"/>
+  <reg name="fr4"   bitsize="64" type="ieee_double"/>
+  <reg name="fr5"   bitsize="64" type="ieee_double"/>
+  <reg name="fr6"   bitsize="64" type="ieee_double"/>
+  <reg name="fr7"   bitsize="64" type="ieee_double"/>
+  <reg name="fr8"   bitsize="64" type="ieee_double"/>
+  <reg name="fr9"   bitsize="64" type="ieee_double"/>
+  <reg name="fr10"  bitsize="64" type="ieee_double"/>
+
+  <reg name="sp"   bitsize="32" type="data_ptr" regnum="30"/>
+  <reg name="iaoq" bitsize="64" type="code_ptr" regnum="33"/>
+</feature>

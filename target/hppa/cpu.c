@@ -91,6 +91,11 @@ static bool hppa_cpu_has_work(CPUState *cs)
     return cs->interrupt_request & (CPU_INTERRUPT_HARD | CPU_INTERRUPT_NMI);
 }
 
+static gchar *hppa_gdb_arch_name(CPUState *cs)
+{
+    return g_strdup("hppa1.0");
+}
+
 static void hppa_cpu_disas_set_info(CPUState *cs, disassemble_info *info)
 {
     info->mach = bfd_mach_hppa20;
@@ -195,8 +200,10 @@ static void hppa_cpu_class_init(ObjectClass *oc, void *data)
     cc->dump_state = hppa_cpu_dump_state;
     cc->set_pc = hppa_cpu_set_pc;
     cc->get_pc = hppa_cpu_get_pc;
+    cc->gdb_arch_name = hppa_gdb_arch_name;
     cc->gdb_read_register = hppa_cpu_gdb_read_register;
     cc->gdb_write_register = hppa_cpu_gdb_write_register;
+    cc->gdb_core_xml_file = "hppa-core.xml";
 #ifndef CONFIG_USER_ONLY
     dc->vmsd = &vmstate_hppa_cpu;
     cc->sysemu_ops = &hppa_sysemu_ops;
