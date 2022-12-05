@@ -64,6 +64,7 @@
 #endif
 
 char *exec_path;
+char real_exec_path[PATH_MAX];
 
 int singlestep;
 static const char *argv0;
@@ -742,6 +743,11 @@ int main(int argc, char **argv, char **envp)
             printf("Error while loading %s: %s\n", exec_path, strerror(errno));
             _exit(EXIT_FAILURE);
         }
+    }
+
+    /* Resolve executable file name to full path name */
+    if (realpath(exec_path, real_exec_path)) {
+        exec_path = real_exec_path;
     }
 
     /*
