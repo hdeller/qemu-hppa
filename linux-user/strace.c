@@ -1089,6 +1089,8 @@ UNUSED static struct flags mmap_flags[] = {
 #ifdef TARGET_MAP_UNINITIALIZED
     FLAG_TARGET(MAP_UNINITIALIZED),
 #endif
+    FLAG_TARGET(MAP_HUGETLB),
+    FLAG_TARGET(MAP_STACK),
     FLAG_END,
 };
 
