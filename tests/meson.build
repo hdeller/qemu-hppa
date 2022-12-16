@@ -1,5 +1,7 @@
 subdir('bench')
-subdir('qemu-iotests')
+if have_system
+  subdir('qemu-iotests')
+endif
 
 test_qapi_outputs = [
   'qapi-builtin-types.c',

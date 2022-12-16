@@ -3021,7 +3021,6 @@ subdir('util')
 subdir('qom')
 subdir('authz')
 subdir('crypto')
-subdir('ui')
 subdir('hw')
 subdir('gdbstub')
 
@@ -3060,9 +3059,10 @@ if have_system or have_user
                          arguments: ['@INPUT@', '@EXTRA_ARGS@', '-o', '@OUTPUT@'])
   subdir('libdecnumber')
   subdir('target')
+  subdir('ui')
+  subdir('audio')
 endif
 
-subdir('audio')
 subdir('io')
 subdir('chardev')
 subdir('fsdev')
@@ -3581,7 +3581,7 @@ subdir('qga')
 
 # Don't build qemu-keymap if xkbcommon is not explicitly enabled
 # when we don't build tools or system
-if xkbcommon.found()
+if xkbcommon.found() and have_system
   # used for the update-keymaps target, so include rules even if !have_tools
   qemu_keymap = executable('qemu-keymap', files('qemu-keymap.c', 'ui/input-keymap.c') + genh,
                            dependencies: [qemuutil, xkbcommon], install: have_tools)
@@ -3596,7 +3596,9 @@ if have_tools
                dependencies: [blockdev, qemuutil, gnutls, selinux],
                install: true)
 
-  subdir('storage-daemon')
+  if have_system
+    subdir('storage-daemon')
+  endif
   subdir('contrib/rdmacm-mux')
   subdir('contrib/elf2dmp')
 
@@ -3611,7 +3613,7 @@ if have_tools
     subdir('contrib/vhost-user-scsi')
   endif
 
-  if targetos == 'linux'
+  if targetos == 'linux' and have_system
     executable('qemu-bridge-helper', files('qemu-bridge-helper.c'),
                dependencies: [qemuutil, libcap_ng],
                install: true,

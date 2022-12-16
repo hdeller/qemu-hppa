@@ -5,7 +5,7 @@ have_virtiofsd = get_option('virtiofsd') \
              error_message: 'virtiofsd requires libcap-ng-devel and seccomp-devel') \
     .require(have_vhost_user,
              error_message: 'virtiofsd needs vhost-user-support') \
-    .disable_auto_if(not have_tools and not have_system) \
+    .disable_auto_if(not have_system) \
     .allowed()
 
 if have_virtiofsd

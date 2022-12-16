@@ -51,12 +51,12 @@ qapi_all_modules = [
   'transaction',
   'virtio',
   'yank',
+  'qdev',
 ]
 if have_system
   qapi_all_modules += [
     'acpi',
     'audio',
-    'qdev',
     'pci',
     'rdma',
     'rocker',
