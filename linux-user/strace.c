@@ -1136,6 +1136,7 @@ UNUSED static struct flags clone_flags[] = {
 #if defined(CLONE_IO)
     FLAG_GENERIC(CLONE_IO),
 #endif
+    FLAG_TARGET(SIGCHLD),
     FLAG_END,
 };
 
