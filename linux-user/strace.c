@@ -3146,7 +3146,8 @@ print_rt_sigprocmask(CPUArchState *cpu_env, const struct syscallname *name,
     }
     qemu_log("%s,", how);
     print_pointer(arg1, 0);
-    print_pointer(arg2, 1);
+    print_pointer(arg2, 0);
+    print_raw_param("%d", arg3, 1);
     print_syscall_epilogue(name);
 }
 #endif
