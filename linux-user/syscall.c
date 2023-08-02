@@ -62,6 +62,7 @@
 #include <linux/icmpv6.h>
 #include <linux/if_tun.h>
 #include <linux/in6.h>
+#include <linux/sctp.h>
 #include <linux/errqueue.h>
 #include <linux/random.h>
 #ifdef CONFIG_TIMERFD
@@ -1736,6 +1737,81 @@ static inline abi_long host_to_target_sockaddr(abi_ulong target_addr,
     return 0;
 }
 
+/* encode PPROTO_SCTP package, return true if sucessful */
+static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int len)
+{
+    struct sctp_initmsg *init;
+    struct sctp_sndrcvinfo *srinfo;
+    struct sctp_sndinfo *sndinfo;
+    struct sctp_rcvinfo *rcvinfo;
+    struct sctp_nxtinfo *nxtinfo;
+    struct sctp_prinfo *prinfo;
+    struct sctp_authinfo *authinfo;
+
+    memcpy(data, target_data, len);
+
+    switch (cmsg_type) {
+    case SCTP_INIT:
+        init = data;
+        INPLACE_SWAP(init->sinit_num_ostreams);
+        INPLACE_SWAP(init->sinit_max_instreams);
+        INPLACE_SWAP(init->sinit_max_attempts);
+        INPLACE_SWAP(init->sinit_max_init_timeo);
+        break;
+    case SCTP_SNDRCV:
+        srinfo = data;
+        INPLACE_SWAP(srinfo->sinfo_stream);
+        INPLACE_SWAP(srinfo->sinfo_ssn);
+        INPLACE_SWAP(srinfo->sinfo_flags);
+        INPLACE_SWAP(srinfo->sinfo_ppid);
+        INPLACE_SWAP(srinfo->sinfo_context);
+        INPLACE_SWAP(srinfo->sinfo_timetolive);
+        INPLACE_SWAP(srinfo->sinfo_tsn);
+        INPLACE_SWAP(srinfo->sinfo_cumtsn);
+        INPLACE_SWAP(srinfo->sinfo_assoc_id);
+        break;
+    case SCTP_SNDINFO:
+        sndinfo = data;
+        INPLACE_SWAP(sndinfo->snd_sid);
+        INPLACE_SWAP(sndinfo->snd_flags);
+        INPLACE_SWAP(sndinfo->snd_ppid);
+        INPLACE_SWAP(sndinfo->snd_context);
+        INPLACE_SWAP(sndinfo->snd_assoc_id);
+        break;
+    case SCTP_RCVINFO:
+        rcvinfo = data;
+        INPLACE_SWAP(rcvinfo->rcv_sid);
+        INPLACE_SWAP(rcvinfo->rcv_ssn);
+        INPLACE_SWAP(rcvinfo->rcv_flags);
+        INPLACE_SWAP(rcvinfo->rcv_ppid);
+        INPLACE_SWAP(rcvinfo->rcv_tsn);
+        INPLACE_SWAP(rcvinfo->rcv_cumtsn);
+        INPLACE_SWAP(rcvinfo->rcv_context);
+        INPLACE_SWAP(rcvinfo->rcv_assoc_id);
+        break;
+    case SCTP_NXTINFO:
+        nxtinfo = data;
+        INPLACE_SWAP(nxtinfo->nxt_sid);
+        INPLACE_SWAP(nxtinfo->nxt_flags);
+        INPLACE_SWAP(nxtinfo->nxt_ppid);
+        INPLACE_SWAP(nxtinfo->nxt_length);
+        INPLACE_SWAP(nxtinfo->nxt_assoc_id);
+        break;
+    case SCTP_PRINFO:
+        prinfo = data;
+        INPLACE_SWAP(prinfo->pr_policy);
+        INPLACE_SWAP(prinfo->pr_value);
+        break;
+    case SCTP_AUTHINFO:
+        authinfo = data;
+        INPLACE_SWAP(authinfo->auth_keynumber);
+        break;
+    default:
+        return false;
+    }
+    return true;
+}
+
 static inline abi_long target_to_host_cmsg(struct msghdr *msgh,
                                            struct target_msghdr *target_msgh)
 {
@@ -1814,8 +1890,11 @@ static inline abi_long target_to_host_cmsg(struct msghdr *msgh,
             if (len >= sizeof(uint32_t)) {
                 *dst = tswap32(*dst);
             }
+        } else if (cmsg->cmsg_level == IPPROTO_SCTP &&
+            handle_sctp_cmsg(cmsg->cmsg_type, data, target_data, len)) {
+                /* data already converted in function above */
         } else {
-            qemu_log_mask(LOG_UNIMP, "Unsupported ancillary data: %d/%d\n",
+            qemu_log_mask(LOG_UNIMP, "t2h: Unsupported ancillary data: %d/%d\n",
                           cmsg->cmsg_level, cmsg->cmsg_type);
             memcpy(data, target_data, len);
         }
@@ -2035,9 +2114,15 @@ static inline abi_long host_to_target_cmsg(struct target_msghdr *target_msgh,
             }
             break;
 
+        case IPPROTO_SCTP: // HELGE
+            if (handle_sctp_cmsg(cmsg->cmsg_type, target_data, data, len)) {
+                break;
+            }
+            goto unimplemented;
+
         default:
         unimplemented:
-            qemu_log_mask(LOG_UNIMP, "Unsupported ancillary data: %d/%d\n",
+            qemu_log_mask(LOG_UNIMP, "h2t: Unsupported ancillary data: %d/%d\n",
                           cmsg->cmsg_level, cmsg->cmsg_type);
             memcpy(target_data, data, MIN(len, tgt_len));
             if (tgt_len > len) {
@@ -2516,6 +2601,37 @@ set_timeout:
                                    sizeof(val)));
         break;
 #endif /* SOL_NETLINK */
+
+    case IPPROTO_SCTP:
+        switch (optname) {
+        case SCTP_NODELAY:
+            break;
+        case SCTP_EVENTS:
+        {
+            char *subscribe;
+
+            subscribe = lock_user(VERIFY_READ, optval_addr, optlen, 1);
+            if (!subscribe && optlen > 0) {
+                return -TARGET_EFAULT;
+            }
+            ret = get_errno(setsockopt(sockfd, level, optname, subscribe, optlen));
+            unlock_user(subscribe, optval_addr, 0);
+            return ret;
+        }
+        default:
+            goto unimplemented;
+        }
+        val = 0;
+        if (optlen < sizeof(uint32_t)) {
+            return -TARGET_EINVAL;
+        }
+        if (get_user_u32(val, optval_addr)) {
+            return -TARGET_EFAULT;
+        }
+        ret = get_errno(setsockopt(sockfd, level, optname, &val,
+                                   sizeof(val)));
+        break;
+
     default:
     unimplemented:
         qemu_log_mask(LOG_UNIMP, "Unsupported setsockopt level=%d optname=%d\n",
@@ -2937,6 +3053,31 @@ get_timeout:
         }
         break;
 #endif /* SOL_NETLINK */
+
+    case IPPROTO_SCTP:
+        switch (optname) {
+        case SCTP_EVENTS:
+        {
+            char *subscribe;
+
+            subscribe = lock_user(VERIFY_WRITE, optval_addr, optlen, 1);
+            if (!subscribe && optlen > 0) {
+                return -TARGET_EFAULT;
+            }
+            lv = optlen;
+            ret = get_errno(getsockopt(sockfd, level, optname, subscribe, &lv));
+            unlock_user(subscribe, optval_addr, 0);
+            if (ret >= 0 && put_user_u32(lv, optlen)) {
+                return -TARGET_EFAULT;
+            }
+            return ret;
+        }
+        default:
+            goto unimplemented;
+        }
+        goto unimplemented;
+        break;
+
     default:
     unimplemented:
         qemu_log_mask(LOG_UNIMP,
@@ -3174,6 +3315,10 @@ static abi_long do_socket(int domain, int type, int protocol)
             default:
                 g_assert_not_reached();
             }
+        }
+        else if (domain == PF_INET && type == SOCK_STREAM
+                 && protocol == IPPROTO_SCTP) {
+            fd_trans_register(ret, &target_sctp_notification_trans);
         }
     }
     return ret;

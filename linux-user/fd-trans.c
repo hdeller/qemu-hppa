@@ -26,6 +26,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/if_bridge.h>
 #endif
+#include <linux/sctp.h>
 #include "qemu.h"
 #include "user-internals.h"
 #include "fd-trans.h"
@@ -1735,3 +1736,113 @@ TargetFdTrans target_inotify_trans = {
     .host_to_target_data = host_to_target_data_inotify,
 };
 #endif
+
+
+static abi_long host_to_target_sctp_notification(void *buf, size_t len)
+{
+    union sctp_notification *n;
+    __u16 type, num;
+
+    #define INPLACE_SWAP_SOCKADDR(var) \
+        INPLACE_SWAP(var.ss_family)
+
+    /* swap header */
+    n = buf;
+    type = n->sn_header.sn_type;
+    num = n->sn_header.sn_length;
+
+    INPLACE_SWAP(n->sn_header.sn_type);
+    INPLACE_SWAP(n->sn_header.sn_flags);
+    INPLACE_SWAP(n->sn_header.sn_length);
+
+    /* swap contents */
+    switch (type) {
+    case SCTP_ASSOC_CHANGE:
+        INPLACE_SWAP(n->sn_assoc_change.sac_state);
+        INPLACE_SWAP(n->sn_assoc_change.sac_error);
+        INPLACE_SWAP(n->sn_assoc_change.sac_outbound_streams);
+        INPLACE_SWAP(n->sn_assoc_change.sac_inbound_streams);
+        INPLACE_SWAP(n->sn_assoc_change.sac_assoc_id);
+        break;
+    case SCTP_PEER_ADDR_CHANGE:
+        INPLACE_SWAP_SOCKADDR(n->sn_paddr_change.spc_aaddr);
+        INPLACE_SWAP(n->sn_paddr_change.spc_state);
+        INPLACE_SWAP(n->sn_paddr_change.spc_error);
+        INPLACE_SWAP(n->sn_paddr_change.spc_assoc_id);
+        break;
+    case SCTP_REMOTE_ERROR:
+        /* sre_error is __be16 */
+        INPLACE_SWAP(n->sn_remote_error.sre_assoc_id);
+        break;
+    case SCTP_SEND_FAILED:
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_stream);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_ssn);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_flags);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_ppid);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_context);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_timetolive);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_tsn);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_cumtsn);
+        INPLACE_SWAP(n->sn_send_failed.ssf_info.sinfo_assoc_id);
+        INPLACE_SWAP(n->sn_send_failed.ssf_assoc_id);
+        break;
+    case SCTP_SHUTDOWN_EVENT:
+        INPLACE_SWAP(n->sn_shutdown_event.sse_assoc_id);
+        break;
+    case SCTP_ADAPTATION_INDICATION:
+        INPLACE_SWAP(n->sn_adaptation_event.sai_adaptation_ind);
+        INPLACE_SWAP(n->sn_adaptation_event.sai_assoc_id);
+        break;
+    case SCTP_PARTIAL_DELIVERY_EVENT:
+        INPLACE_SWAP(n->sn_pdapi_event.pdapi_indication);
+        INPLACE_SWAP(n->sn_pdapi_event.pdapi_assoc_id);
+        INPLACE_SWAP(n->sn_pdapi_event.pdapi_stream);
+        INPLACE_SWAP(n->sn_pdapi_event.pdapi_seq);
+        break;
+    case SCTP_AUTHENTICATION_EVENT:
+        INPLACE_SWAP(n->sn_authkey_event.auth_keynumber);
+        INPLACE_SWAP(n->sn_authkey_event.auth_altkeynumber);
+        INPLACE_SWAP(n->sn_authkey_event.auth_indication);
+        INPLACE_SWAP(n->sn_authkey_event.auth_assoc_id);
+        break;
+    case SCTP_SENDER_DRY_EVENT:
+        INPLACE_SWAP(n->sn_sender_dry_event.sender_dry_assoc_id);
+        break;
+    case SCTP_STREAM_RESET_EVENT:
+        INPLACE_SWAP(n->sn_strreset_event.strreset_assoc_id);
+        num -= sizeof(n->sn_strreset_event);
+        do {
+            INPLACE_SWAP(n->sn_strreset_event.strreset_stream_list[num]);
+        } while (num--);
+        break;
+    case SCTP_ASSOC_RESET_EVENT:
+        INPLACE_SWAP(n->sn_assocreset_event.assocreset_assoc_id);
+        INPLACE_SWAP(n->sn_assocreset_event.assocreset_local_tsn);
+        INPLACE_SWAP(n->sn_assocreset_event.assocreset_remote_tsn);
+        break;
+    case SCTP_STREAM_CHANGE_EVENT:
+        INPLACE_SWAP(n->sn_strchange_event.strchange_assoc_id);
+        INPLACE_SWAP(n->sn_strchange_event.strchange_instrms);
+        INPLACE_SWAP(n->sn_strchange_event.strchange_outstrms);
+        break;
+    case SCTP_SEND_FAILED_EVENT:
+        INPLACE_SWAP(n->sn_send_failed_event.ssf_error);
+        INPLACE_SWAP(n->sn_send_failed_event.ssfe_info.snd_sid);
+        INPLACE_SWAP(n->sn_send_failed_event.ssfe_info.snd_flags);
+        INPLACE_SWAP(n->sn_send_failed_event.ssfe_info.snd_ppid);
+        INPLACE_SWAP(n->sn_send_failed_event.ssfe_info.snd_context);
+        INPLACE_SWAP(n->sn_send_failed_event.ssfe_info.snd_assoc_id);
+        INPLACE_SWAP(n->sn_send_failed_event.ssf_assoc_id);
+        break;
+    default:
+        qemu_log_mask(LOG_UNIMP, ("Unsupported SCTP EVENT type %d\n"), type);
+    }
+
+    #undef INPLACE_SWAP_SOCKADDR
+
+    return len;
+}
+
+TargetFdTrans target_sctp_notification_trans = {
+    .host_to_target_data = host_to_target_sctp_notification,
+};

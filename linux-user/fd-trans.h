@@ -16,6 +16,14 @@
 #ifndef FD_TRANS_H
 #define FD_TRANS_H
 
+
+#define INPLACE_SWAP(var) { \
+    if (sizeof(var) == 1) { /* nothing */       } else \
+    if (sizeof(var) == 2) { var = tswap16(var); } else \
+    if (sizeof(var) == 4) { var = tswap32(var); } else \
+    if (sizeof(var) == 8) { var = tswap64(var); } else \
+    { QEMU_BUILD_BUG_ON(sizeof(var) != 2 && sizeof(var) != 4); } }
+
 #include "qemu/lockable.h"
 
 typedef abi_long (*TargetFdDataFunc)(void *, size_t);
@@ -136,4 +144,6 @@ extern TargetFdTrans target_timerfd_trans;
      defined(__NR_inotify_init1))
 extern TargetFdTrans target_inotify_trans;
 #endif
+extern TargetFdTrans target_sctp_notification_trans;
+
 #endif

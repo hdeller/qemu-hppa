@@ -3122,7 +3122,7 @@ static void load_elf_image(const char *image_name, int image_fd,
              * select guest_base.  In this case we pass a size.
              */
             probe_guest_base(image_name, 0, hiaddr - loaddr);
-            load_offset = TASK_UNMAPPED_BASE_PIE;
+            load_offset = HOST_PAGE_ALIGN(TASK_UNMAPPED_BASE_PIE);
         }
     }
 
@@ -3178,7 +3178,7 @@ static void load_elf_image(const char *image_name, int image_fd,
     info->start_data = -1;
     info->end_data = 0;
     /* possible start for brk is behind all sections of this ELF file. */
-    info->brk = TARGET_PAGE_ALIGN(load_offset + hiaddr);
+    info->brk = HOST_PAGE_ALIGN(load_offset + hiaddr);
     info->elf_flags = ehdr->e_flags;
 
     prot_exec = PROT_EXEC;
