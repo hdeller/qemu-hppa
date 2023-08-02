@@ -1571,7 +1571,7 @@ TargetFdTrans target_packet_trans = {
 };
 
 #ifdef CONFIG_RTNETLINK
-static abi_long netlink_route_target_to_host(void *buf, size_t len)
+static abi_long netlink_route_target_to_host(void *buf, size_t len, void *msgh)
 {
     abi_long ret;
 
@@ -1583,7 +1583,7 @@ static abi_long netlink_route_target_to_host(void *buf, size_t len)
     return len;
 }
 
-static abi_long netlink_route_host_to_target(void *buf, size_t len)
+static abi_long netlink_route_host_to_target(void *buf, size_t len, void *msgh)
 {
     abi_long ret;
 
@@ -1601,7 +1601,7 @@ TargetFdTrans target_netlink_route_trans = {
 };
 #endif /* CONFIG_RTNETLINK */
 
-static abi_long netlink_audit_target_to_host(void *buf, size_t len)
+static abi_long netlink_audit_target_to_host(void *buf, size_t len, void *msgh)
 {
     abi_long ret;
 
@@ -1613,7 +1613,7 @@ static abi_long netlink_audit_target_to_host(void *buf, size_t len)
     return len;
 }
 
-static abi_long netlink_audit_host_to_target(void *buf, size_t len)
+static abi_long netlink_audit_host_to_target(void *buf, size_t len, void *msgh)
 {
     abi_long ret;
 
@@ -1670,7 +1670,7 @@ host_to_target_signalfd_siginfo(struct signalfd_siginfo *tinfo,
     tinfo->ssi_addr = tswap64(info->ssi_addr);
 }
 
-static abi_long host_to_target_data_signalfd(void *buf, size_t len)
+static abi_long host_to_target_data_signalfd(void *buf, size_t len, void *msgh)
 {
     int i;
 
@@ -1685,7 +1685,7 @@ TargetFdTrans target_signalfd_trans = {
     .host_to_target_data = host_to_target_data_signalfd,
 };
 
-static abi_long swap_data_u64(void *buf, size_t len)
+static abi_long swap_data_u64(void *buf, size_t len, void *msgh)
 {
     uint64_t *counter = buf;
     int i;
@@ -1713,7 +1713,7 @@ TargetFdTrans target_timerfd_trans = {
 
 #if defined(CONFIG_INOTIFY) && (defined(TARGET_NR_inotify_init) || \
         defined(TARGET_NR_inotify_init1))
-static abi_long host_to_target_data_inotify(void *buf, size_t len)
+static abi_long host_to_target_data_inotify(void *buf, size_t len, void *msgh)
 {
     struct inotify_event *ev;
     int i;
@@ -1738,10 +1738,26 @@ TargetFdTrans target_inotify_trans = {
 #endif
 
 
-static abi_long host_to_target_sctp_notification(void *buf, size_t len)
+#if 0
+abi_long target_to_host_sctp_data(void *buf, size_t len, void *_msgh)
+{
+    struct target_msghdr *tmsgh = _msgh;
+    return handle_sctp_cmsg_data(int cmsg_type, buf);
+}
+#endif
+
+abi_long host_to_target_sctp(void *buf, size_t len, void *_msgh)
 {
     union sctp_notification *n;
     __u16 type, num;
+    struct msghdr *msgh = _msgh;
+
+    /* if controllen != 0, then we receive data */
+    if (msgh->msg_controllen != 0) {
+        return len;
+    }
+
+    /* msgh controllen is zero, so this is a notification */
 
     #define INPLACE_SWAP_SOCKADDR(var) \
         INPLACE_SWAP(var.ss_family)
@@ -1751,10 +1767,13 @@ static abi_long host_to_target_sctp_notification(void *buf, size_t len)
     type = n->sn_header.sn_type;
     num = n->sn_header.sn_length;
 
+qemu_log_mask(LOG_UNIMP, "h2t: notification found %#x  len %d--------------- \n", type, (int)len);
+
+
     INPLACE_SWAP(n->sn_header.sn_type);
     INPLACE_SWAP(n->sn_header.sn_flags);
     INPLACE_SWAP(n->sn_header.sn_length);
-
+ 
     /* swap contents */
     switch (type) {
     case SCTP_ASSOC_CHANGE:
@@ -1835,7 +1854,7 @@ static abi_long host_to_target_sctp_notification(void *buf, size_t len)
         INPLACE_SWAP(n->sn_send_failed_event.ssf_assoc_id);
         break;
     default:
-        qemu_log_mask(LOG_UNIMP, ("Unsupported SCTP EVENT type %d\n"), type);
+        qemu_log_mask(LOG_UNIMP, ("Unsupported SCTP EVENT type %x\n"), type);
     }
 
     #undef INPLACE_SWAP_SOCKADDR
@@ -1844,5 +1863,6 @@ static abi_long host_to_target_sctp_notification(void *buf, size_t len)
 }
 
 TargetFdTrans target_sctp_notification_trans = {
-    .host_to_target_data = host_to_target_sctp_notification,
+    .host_to_target_data = host_to_target_sctp,
+//    .target_to_host_data = target_to_host_sctp_data,
 };

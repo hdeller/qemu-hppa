@@ -1737,8 +1737,8 @@ static inline abi_long host_to_target_sockaddr(abi_ulong target_addr,
     return 0;
 }
 
-/* encode PPROTO_SCTP package, return true if sucessful */
-static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int len)
+/* encode IPPROTO_SCTP package, return true if sucessfull */
+static int handle_sctp_cmsg(int cmsg_type, void *data, void *src_data)
 {
     struct sctp_initmsg *init;
     struct sctp_sndrcvinfo *srinfo;
@@ -1747,12 +1747,13 @@ static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int le
     struct sctp_nxtinfo *nxtinfo;
     struct sctp_prinfo *prinfo;
     struct sctp_authinfo *authinfo;
-
-    memcpy(data, target_data, len);
+    int len = 0;
 
     switch (cmsg_type) {
     case SCTP_INIT:
         init = data;
+        len = sizeof(*init);
+        memcpy(data, src_data, len);
         INPLACE_SWAP(init->sinit_num_ostreams);
         INPLACE_SWAP(init->sinit_max_instreams);
         INPLACE_SWAP(init->sinit_max_attempts);
@@ -1760,6 +1761,8 @@ static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int le
         break;
     case SCTP_SNDRCV:
         srinfo = data;
+        len = sizeof(*srinfo);
+        memcpy(data, src_data, len);
         INPLACE_SWAP(srinfo->sinfo_stream);
         INPLACE_SWAP(srinfo->sinfo_ssn);
         INPLACE_SWAP(srinfo->sinfo_flags);
@@ -1772,6 +1775,8 @@ static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int le
         break;
     case SCTP_SNDINFO:
         sndinfo = data;
+        len = sizeof(*sndinfo);
+        memcpy(data, src_data, len);
         INPLACE_SWAP(sndinfo->snd_sid);
         INPLACE_SWAP(sndinfo->snd_flags);
         INPLACE_SWAP(sndinfo->snd_ppid);
@@ -1780,6 +1785,8 @@ static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int le
         break;
     case SCTP_RCVINFO:
         rcvinfo = data;
+        len = sizeof(*rcvinfo);
+        memcpy(data, src_data, len);
         INPLACE_SWAP(rcvinfo->rcv_sid);
         INPLACE_SWAP(rcvinfo->rcv_ssn);
         INPLACE_SWAP(rcvinfo->rcv_flags);
@@ -1791,6 +1798,8 @@ static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int le
         break;
     case SCTP_NXTINFO:
         nxtinfo = data;
+        len = sizeof(*nxtinfo);
+        memcpy(data, src_data, len);
         INPLACE_SWAP(nxtinfo->nxt_sid);
         INPLACE_SWAP(nxtinfo->nxt_flags);
         INPLACE_SWAP(nxtinfo->nxt_ppid);
@@ -1799,17 +1808,21 @@ static int handle_sctp_cmsg(int cmsg_type, void *data, void *target_data, int le
         break;
     case SCTP_PRINFO:
         prinfo = data;
+        len = sizeof(*prinfo);
+        memcpy(data, src_data, len);
         INPLACE_SWAP(prinfo->pr_policy);
         INPLACE_SWAP(prinfo->pr_value);
         break;
     case SCTP_AUTHINFO:
         authinfo = data;
+        len = sizeof(*authinfo);
+        memcpy(data, src_data, len);
         INPLACE_SWAP(authinfo->auth_keynumber);
         break;
-    default:
-        return false;
     }
-    return true;
+qemu_log_mask(LOG_UNIMP, "NORMAL: cmsg_type %#x  len %d--------------- \n", cmsg_type, len);
+
+    return len;
 }
 
 static inline abi_long target_to_host_cmsg(struct msghdr *msgh,
@@ -1891,7 +1904,7 @@ static inline abi_long target_to_host_cmsg(struct msghdr *msgh,
                 *dst = tswap32(*dst);
             }
         } else if (cmsg->cmsg_level == IPPROTO_SCTP &&
-            handle_sctp_cmsg(cmsg->cmsg_type, data, target_data, len)) {
+            handle_sctp_cmsg(cmsg->cmsg_type, data, target_data)) {
                 /* data already converted in function above */
         } else {
             qemu_log_mask(LOG_UNIMP, "t2h: Unsupported ancillary data: %d/%d\n",
@@ -2115,10 +2128,15 @@ static inline abi_long host_to_target_cmsg(struct target_msghdr *target_msgh,
             break;
 
         case IPPROTO_SCTP: // HELGE
-            if (handle_sctp_cmsg(cmsg->cmsg_type, target_data, data, len)) {
+            break;
+#if 0
+qemu_log_mask(LOG_UNIMP, "RECEIVE: MSG FLAGS %#x   type %#x  len %d--------------- \n", tswap16(msgh->msg_flags), cmsg->cmsg_type, len);
+            len = handle_sctp_cmsg(cmsg->cmsg_type, target_data, data);
+            if (len) {
                 break;
             }
             goto unimplemented;
+#endif
 
         default:
         unimplemented:
@@ -3316,9 +3334,10 @@ static abi_long do_socket(int domain, int type, int protocol)
                 g_assert_not_reached();
             }
         }
-        else if (domain == PF_INET && type == SOCK_STREAM
-                 && protocol == IPPROTO_SCTP) {
-            fd_trans_register(ret, &target_sctp_notification_trans);
+        else if (11111  && domain == PF_INET && 
+                (type == SOCK_STREAM || type == SOCK_SEQPACKET) &&
+                protocol == IPPROTO_SCTP) {
+            fd_trans_register(ret, &target_sctp_notification_trans); // kann nicht benutzt werden
         }
     }
     return ret;
@@ -3430,7 +3449,8 @@ static abi_long do_sendrecvmsg_locked(int fd, struct target_msghdr *msgp,
             host_msg = g_malloc(msg.msg_iov->iov_len);
             memcpy(host_msg, msg.msg_iov->iov_base, msg.msg_iov->iov_len);
             ret = fd_trans_target_to_host_data(fd)(host_msg,
-                                                   msg.msg_iov->iov_len);
+                                                   msg.msg_iov->iov_len,
+                                                   msgp );
             if (ret >= 0) {
                 msg.msg_iov->iov_base = host_msg;
                 ret = get_errno(safe_sendmsg(fd, &msg, flags));
@@ -3448,7 +3468,8 @@ static abi_long do_sendrecvmsg_locked(int fd, struct target_msghdr *msgp,
             len = ret;
             if (fd_trans_host_to_target_data(fd)) {
                 ret = fd_trans_host_to_target_data(fd)(msg.msg_iov->iov_base,
-                                               MIN(msg.msg_iov->iov_len, len));
+                                               MIN(msg.msg_iov->iov_len, len),
+                                               &msg);
             }
             if (!is_error(ret)) {
                 ret = host_to_target_cmsg(msgp, &msg);
@@ -3693,7 +3714,7 @@ static abi_long do_sendto(int fd, abi_ulong msg, size_t len, int flags,
         copy_msg = host_msg;
         host_msg = g_malloc(len);
         memcpy(host_msg, copy_msg, len);
-        ret = fd_trans_target_to_host_data(fd)(host_msg, len);
+        ret = fd_trans_target_to_host_data(fd)(host_msg, len, NULL);
         if (ret < 0) {
             goto fail;
         }
@@ -3756,7 +3777,7 @@ static abi_long do_recvfrom(int fd, abi_ulong msg, size_t len, int flags,
     if (!is_error(ret)) {
         if (fd_trans_host_to_target_data(fd)) {
             abi_long trans;
-            trans = fd_trans_host_to_target_data(fd)(host_msg, MIN(ret, len));
+            trans = fd_trans_host_to_target_data(fd)(host_msg, MIN(ret, len), NULL);
             if (is_error(trans)) {
                 ret = trans;
                 goto fail;
@@ -9349,7 +9370,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
             ret = get_errno(safe_read(arg1, p, arg3));
             if (ret >= 0 &&
                 fd_trans_host_to_target_data(arg1)) {
-                ret = fd_trans_host_to_target_data(arg1)(p, ret);
+                ret = fd_trans_host_to_target_data(arg1)(p, ret, NULL);
             }
             unlock_user(p, arg2, ret);
         }
@@ -9363,7 +9384,7 @@ static abi_long do_syscall1(CPUArchState *cpu_env, int num, abi_long arg1,
         if (fd_trans_target_to_host_data(arg1)) {
             void *copy = g_malloc(arg3);
             memcpy(copy, p, arg3);
-            ret = fd_trans_target_to_host_data(arg1)(copy, arg3);
+            ret = fd_trans_target_to_host_data(arg1)(copy, arg3, NULL);
             if (ret >= 0) {
                 ret = get_errno(safe_write(arg1, copy, ret));
             }

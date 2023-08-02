@@ -26,7 +26,7 @@
 
 #include "qemu/lockable.h"
 
-typedef abi_long (*TargetFdDataFunc)(void *, size_t);
+typedef abi_long (*TargetFdDataFunc)(void *, size_t, void *msgh);
 typedef abi_long (*TargetFdAddrFunc)(void *, abi_ulong, socklen_t);
 typedef struct TargetFdTrans {
     TargetFdDataFunc host_to_target_data;
@@ -145,5 +145,6 @@ extern TargetFdTrans target_timerfd_trans;
 extern TargetFdTrans target_inotify_trans;
 #endif
 extern TargetFdTrans target_sctp_notification_trans;
+extern abi_long host_to_target_sctp(void *buf, size_t len, void *msgh);
 
 #endif
