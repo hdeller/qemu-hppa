@@ -1746,6 +1746,10 @@ abi_long target_to_host_sctp_data(void *buf, size_t len, void *_msgh)
 }
 #endif
 
+// TEST MIT
+// Q_EMU_LOG=strace /usr/bin/sctp_test -H localhost -P 6001 -h localhost -p 6000 -s -c 6
+// /usr/bin/sctp_test -H localhost -P 6000 -l -d 2
+
 abi_long host_to_target_sctp(void *buf, size_t len, void *_msgh)
 {
     union sctp_notification *n;
