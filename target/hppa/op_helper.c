@@ -155,12 +155,61 @@ void HELPER(stby_e_parallel)(CPUHPPAState *env, target_ulong addr,
     do_stby_e(env, addr, val, true, GETPC());
 }
 
-void HELPER(ldc_check)(target_ulong addr)
+target_ureg HELPER(ldc)(CPUHPPAState *env, target_ulong addr, uint32_t size)
 {
+    uintptr_t ra = GETPC();
+    int mmu_idx = cpu_mmu_index(env, 0);
+    void *vaddr;
+
+    /*
+     * For hppa1.1, LDCW is undefined unless aligned mod 16.
+     * However actual hardware succeeds with aligned mod 4.
+     * Detect this case and log a GUEST_ERROR.
+     *
+     * TODO: HPPA64 relaxes the over-alignment requirement
+     * with the ,co completer.
+     */
     if (unlikely(addr & 0xf)) {
         qemu_log_mask(LOG_GUEST_ERROR,
                       "Undefined ldc to unaligned address mod 16: "
                       TARGET_FMT_lx "\n", addr);
+    }
+
+    vaddr = probe_access(env, addr, size, MMU_DATA_STORE, mmu_idx, ra);
+    if (vaddr == NULL) {
+        cpu_loop_exit_atomic(env_cpu(env), ra);
+    }
+
+    if (size == 4) {
+        /* 32-bit ldcw */
+        uint32_t old, *haddr;
+
+        haddr = (uint32_t *)((uintptr_t)vaddr);
+        old = *haddr;
+
+        /* if already zero, do not write 0 again to reduce memory presssure */
+        if (old == 0) {
+            return 0;
+        }
+        old = qatomic_xchg(haddr, (uint32_t) 0);
+        return be32_to_cpu(old);
+    } else {
+        /* 64-bit ldcd */
+        uint64_t old, *haddr;
+
+        if (TARGET_REGISTER_BITS != 64) {
+            hppa_dynamic_excp(env, EXCP_ILL, ra);
+        }
+
+        haddr = (uint64_t *)((uintptr_t)vaddr);
+        old = *haddr;
+
+        /* if already zero, do not write 0 again to reduce memory presssure */
+        if (old == 0) {
+            return 0;
+        }
+        old = qatomic_xchg(haddr, (uint64_t) 0);
+        return be64_to_cpu(old);
     }
 }
 
