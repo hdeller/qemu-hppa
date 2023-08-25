@@ -25,7 +25,7 @@
 #define TARGET_MS_INVALIDATE 4
 
 /* arch/parisc/include/asm/processor.h: DEFAULT_MAP_BASE32 */
-#define TASK_UNMAPPED_BASE      0x40000000
+#define TASK_UNMAPPED_BASE      0xfa000000
 
 /* arch/parisc/include/asm/elf.h */
 #define ELF_ET_DYN_BASE         (TASK_UNMAPPED_BASE + 0x01000000)
