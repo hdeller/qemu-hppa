@@ -72,16 +72,16 @@ host and target with same or different endianness.
             | host (le)                     host (be)
             | 32             64             32             64
 ------------+------------------------------------------------------------
-target (le) | s0, u0         s1, u1         s?, u?         s?, u?
+target (le) | s0, u0         s1, u1         s2, u?         s2, u?
 32 bit      |
             |
-target (le) | sc, uc         s1, u1         s?, u?         s?, u?
+target (le) | sc, uc         s1, u1         s2, u?         s2, u?
 64 bit      |
             |
-target (be) | sc, u0         sc, uc         s?, u?         s?, u?
+target (be) | sc, u0         sc, uc         s2, u?         s2, u?
 32 bit      |
             |
-target (be) | sc, uc         sc, uc         s?, u?         s?, u?
+target (be) | sc, uc         sc, uc         s?, u?         s2, u?
 64 bit      |
             |
 
@@ -110,6 +110,10 @@ u1 = linux-user-test works
   A cross compiled QEMU for ppc host works at least partially:
   i386-linux-user/qemu-i386 can run a simple hello-world program
   (tested in a ppc emulation).
+  The big-endian tests were run on native hppa (big-endian, 32-bit) and
+  ppc64 (big-endian, 64-bit) machines. Tested target machines were
+  x86 and x86-64 (little-endian, debian install ISO) and 32- and 64-bit
+  big-endian hppa (NetBSD and Debian install ISOs).
 
 * Some TCG opcodes are either missing in the code generator and/or
   in the interpreter. These opcodes raise a runtime exception, so it is

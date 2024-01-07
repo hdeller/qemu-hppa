@@ -585,11 +585,8 @@ char *qemu_get_pid_name(pid_t pid)
 
 void *qemu_alloc_stack(size_t *sz)
 {
-    void *ptr;
+    void *ptr, *ptr2;
     int flags;
-#ifdef CONFIG_DEBUG_STACK_USAGE
-    void *ptr2;
-#endif
     size_t pagesz = qemu_real_host_page_size();
 #ifdef _SC_THREAD_STACK_MIN
     /* avoid stacks smaller than _SC_THREAD_STACK_MIN */
@@ -619,7 +616,12 @@ void *qemu_alloc_stack(size_t *sz)
     }
 
     /* Stack grows down -- guard page at the bottom. */
-    if (mprotect(ptr, pagesz, PROT_NONE) != 0) {
+    ptr2 = ptr;
+#if defined(__hppa__)
+    /* but on hppa the stack grows up, so guard the top page instead */
+    ptr2 = ptr + *sz - pagesz;
+#endif
+    if (mprotect(ptr2, pagesz, PROT_NONE) != 0) {
         perror("failed to set up stack guard page");
         abort();
     }
