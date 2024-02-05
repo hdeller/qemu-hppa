@@ -1156,11 +1156,22 @@ again:
             qemu_log_mask(LOG_GUEST_ERROR,
                           "lsi_scsi: inf. loop with UDC masked");
         }
-        lsi_script_scsi_interrupt(s, LSI_SIST0_UDC, 0);
-        lsi_disconnect(s);
+        if (0) {
+            lsi_script_scsi_interrupt(s, LSI_SIST0_UDC, 0);
+            lsi_disconnect(s);
+        } else {
+            /*
+             * Workaround for HP-UX 10.20: Instead of disconnecting, which causes a
+             * long delay, emulate a INTERRUPT 2 instruction.
+             */
+            s->dsps = 2;
+            lsi_script_dma_interrupt(s, LSI_DSTAT_SIR);
+        }
         trace_lsi_execute_script_stop();
         reentrancy_level--;
         return;
+    } else {
+        s->sist0 &= ~LSI_SIST0_MA;
     }
     insn = read_dword(s, s->dsp);
     if (!insn) {
