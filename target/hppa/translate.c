@@ -182,7 +182,7 @@ static int expand_16(DisasContext *ctx, int val)
     int i = (-(val & 1) << 13) | extract32(val, 1, 13);
 
     if (ctx->tb_flags & PSW_W) {
-        i ^= val & (3 << 13);
+        i ^= ((val >> 14) & 3) << 13;
     }
     return i;
 }
