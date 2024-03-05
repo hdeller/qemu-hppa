@@ -3191,7 +3191,7 @@ static bool trans_stby(DisasContext *ctx, arg_stby *a)
 
     nullify_over(ctx);
 
-    form_gva(ctx, &addr, &ofs, a->b, 0, 0, a->disp, a->sp, a->m,
+    form_gva(ctx, &addr, &ofs, a->b, 0, 0, a->disp, a->sp, !a->a && a->m,
              MMU_DISABLED(ctx));
     val = load_gpr(ctx, a->r);
     if (a->a) {
