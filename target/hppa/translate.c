@@ -1125,6 +1125,9 @@ static void do_add(DisasContext *ctx, unsigned rt, TCGv_i64 in1,
     if (is_tsv || cond_need_sv(c)) {
         sv = do_add_sv(ctx, dest, in1, in2);
         if (is_tsv) {
+            if (!d) {
+                tcg_gen_ext32s_i64(sv, sv);
+            }
             /* ??? Need to include overflow from shift.  */
             gen_helper_tsv(tcg_env, sv);
         }
