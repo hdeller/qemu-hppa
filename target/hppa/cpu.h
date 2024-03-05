@@ -127,7 +127,7 @@
 #define PSW_Y            0x80000000 /* PA1.x only */
 
 #define PSW_SM (PSW_W | PSW_E | PSW_O | PSW_G | PSW_F \
-               | PSW_R | PSW_Q | PSW_P | PSW_D | PSW_I)
+               | PSW_R | PSW_Q | PSW_P | PSW_D | PSW_I | PSW_C)
 
 /* ssm/rsm instructions number PSW_W and PSW_E differently */
 #define PSW_SM_I         PSW_I      /* Enable External Interrupts */
