@@ -2016,6 +2016,7 @@ static void do_page_zero(DisasContext *ctx)
 static bool trans_nop(DisasContext *ctx, arg_nop *a)
 {
     cond_free(&ctx->null_cond);
+    ctx->base.is_jmp = DISAS_IAQ_N_STALE;
     return true;
 }
 
@@ -2366,6 +2367,7 @@ static bool trans_nop_addrx(DisasContext *ctx, arg_ldst *a)
         save_gpr(ctx, a->b, dest);
     }
     cond_free(&ctx->null_cond);
+    ctx->base.is_jmp = DISAS_IAQ_N_STALE;
     return true;
 }
 
