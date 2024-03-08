@@ -283,6 +283,7 @@ static inline int HPPA_BTLB_ENTRIES(CPUHPPAState *env)
 
 void hppa_translate_init(void);
 
+#define HPPA_GVA_OFFSET_MASK64 0x301fffffffffffff
 #define CPU_RESOLVING_TYPE TYPE_HPPA_CPU
 
 static inline target_ulong hppa_form_gva_psw(target_ulong psw, uint64_t spc,
@@ -291,7 +292,7 @@ static inline target_ulong hppa_form_gva_psw(target_ulong psw, uint64_t spc,
 #ifdef CONFIG_USER_ONLY
     return off;
 #else
-    off &= psw & PSW_W ? MAKE_64BIT_MASK(0, 62) : MAKE_64BIT_MASK(0, 32);
+    off &= HPPA_GVA_OFFSET_MASK64; // WHY?
     return spc | off;
 #endif
 }

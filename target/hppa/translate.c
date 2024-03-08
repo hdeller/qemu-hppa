@@ -588,7 +588,7 @@ static bool nullify_end(DisasContext *ctx)
 static uint64_t gva_offset_mask(DisasContext *ctx)
 {
     return (ctx->tb_flags & PSW_W
-            ? MAKE_64BIT_MASK(0, 62)
+            ? HPPA_GVA_OFFSET_MASK64
             : MAKE_64BIT_MASK(0, 32));
 }
 
@@ -1429,7 +1429,7 @@ static void form_gva(DisasContext *ctx, TCGv_i64 *pgva, TCGv_i64 *pofs,
 
     *pofs = ofs;
     *pgva = addr = tcg_temp_new_i64();
-    tcg_gen_andi_i64(addr, modify <= 0 ? ofs : base, gva_offset_mask(ctx));
+    tcg_gen_andi_i64(addr, modify <= 0 ? ofs : base, gva_offset_mask(ctx) | (3ULL << 62));
 #ifndef CONFIG_USER_ONLY
     if (!is_phys) {
         tcg_gen_or_i64(addr, addr, space_select(ctx, sp, base));
