@@ -41,6 +41,7 @@
 typedef struct PCIMultiSerialState {
     PCIDevice    dev;
     MemoryRegion iobar;
+    MemoryRegion membar;
     uint32_t     ports;
     char         *name[PCI_SERIAL_MAX_PORTS];
     SerialState  state[PCI_SERIAL_MAX_PORTS];
@@ -101,7 +102,9 @@ static void multi_serial_pci_realize(PCIDevice *dev, Error **errp)
     pci->dev.config[PCI_CLASS_PROG] = pci->prog_if;
     pci->dev.config[PCI_INTERRUPT_PIN] = 0x01;
     memory_region_init(&pci->iobar, OBJECT(pci), "multiserial", 8 * nports);
-    pci_register_bar(&pci->dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &pci->iobar);
+    memory_region_init_alias(&pci->membar, OBJECT(pci), "multiserial-mm", &pci->iobar, 0, 8 * nports);
+    pci_register_bar(&pci->dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &pci->membar);
+    pci_register_bar(&pci->dev, 1, PCI_BASE_ADDRESS_SPACE_IO, &pci->iobar);
     pci->irqs = qemu_allocate_irqs(multi_serial_irq_mux, pci, nports);
 
     for (i = 0; i < nports; i++) {

@@ -372,6 +372,7 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
 
     pci_init_nic_devices(pci_bus, mc->default_nic);
 
+#if 0
     /* BMC board: HP Powerbar SP2 Diva (with console only) */
     pci_dev = pci_new(-1, "pci-serial");
     if (!lasi_dev) {
@@ -383,10 +384,50 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
     pci_config_set_vendor_id(pci_dev->config, PCI_VENDOR_ID_HP);
     pci_config_set_device_id(pci_dev->config, 0x1048);
     pci_set_word(&pci_dev->config[PCI_SUBSYSTEM_VENDOR_ID], PCI_VENDOR_ID_HP);
-    pci_set_word(&pci_dev->config[PCI_SUBSYSTEM_ID], 0x1227); /* Powerbar */
+    pci_set_word(&pci_dev->config[PCI_SUBSYSTEM_ID], 0x1049); /* Diva Tosca1 */
+
+#else
+
+    /* BMC board: HP PDiva Tosca1 (with console only) */
+#if 0
+rp5470:
+[  188.794474] pci 0000:00:04.0: [103c:128d] type 00 class 0x088000
+[  188.798195] pci 0000:00:04.1: [103c:1048] type 00 class 0x070002
+[  188.798525] pci 0000:00:04.1: reg 0x10: [mem 0xffffffff80000000-0xffffffff80000fff]
+[  188.801291] pci 0000:00:04.1: reg 0x14: [io  0x0000-0x003f]
+
+[  210.369677] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[  210.369677] serial 0000:00:04.1: enabling device (0142 -> 0143)
+[  210.373489] printk: console [ttyS0] disabled
+[  210.397208] 0000:00:04.1: ttyS0 at MMIO 0xffffffff80000000 (irq = 70, base_baud = 115200) is a 16550A
+[  210.397745] printk: console [ttyS0] enabled
+[  210.398236] printk: bootconsole [ttyB0] disabled
+[  210.401329] 0000:00:04.1: ttyS1 at MMIO 0xffffffff80000008 (irq = 70, base_baud = 115200) is a 16450
+[  210.421168] 0000:00:04.1: ttyS2 at MMIO 0xffffffff80000010 (irq = 70, base_baud = 115200) is a 16550A
+[  210.441166] 0000:00:04.1: ttyS3 at MMIO 0xffffffff80000030 (irq = 70, base_baud = 115200) is a 16550A
+[  210.445214] serial 0000:00:04.1: Couldn t register serial port 0, irq 70, type 2, error -28
+#endif
+    pci_dev = pci_new(-1, "pci-serial-4x");
+    // Siehe Maestro.pdf pg 25ff
+    if (!lasi_dev) {
+        /* bind default keyboard/serial to Diva card */
+        qdev_prop_set_chr(DEVICE(pci_dev), "chardev1", serial_hd(0)); // XX
+        qdev_prop_set_chr(DEVICE(pci_dev), "chardev2", serial_hd(1)); // XX
+        qdev_prop_set_chr(DEVICE(pci_dev), "chardev3", serial_hd(2));
+        qdev_prop_set_chr(DEVICE(pci_dev), "chardev4", serial_hd(3));
+    }
+    qdev_prop_set_uint8(DEVICE(pci_dev), "prog_if", 0);
+    pci_realize_and_unref(pci_dev, pci_bus, &error_fatal);
+    pci_config_set_vendor_id(pci_dev->config, PCI_VENDOR_ID_HP);
+    pci_config_set_device_id(pci_dev->config, 0x1048); // Diva GSP chip
+    pci_set_word(&pci_dev->config[PCI_SUBSYSTEM_VENDOR_ID], PCI_VENDOR_ID_HP);
+    pci_set_word(&pci_dev->config[PCI_SUBSYSTEM_ID], 0x1049); /* this is console Diva */
+    pci_set_word(&pci_dev->config[PCI_STATUS], PCI_STATUS_DEVSEL_MEDIUM | 0x80);
+    pci_set_long(&pci_dev->config[PCI_CLASS_REVISION], 0x70002 << 8 | 1); // Rev #1 Diva
+#endif
 
     /* create a second serial PCI card when running Astro */
-    if (serial_hd(1) && !lasi_dev) {
+    if (0 && serial_hd(1) && !lasi_dev) {
         pci_dev = pci_new(-1, "pci-serial-4x");
         qdev_prop_set_chr(DEVICE(pci_dev), "chardev1", serial_hd(1));
         qdev_prop_set_chr(DEVICE(pci_dev), "chardev2", serial_hd(2));
