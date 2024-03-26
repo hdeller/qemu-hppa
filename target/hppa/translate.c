@@ -4580,18 +4580,6 @@ static bool trans_diag(DisasContext *ctx, arg_diag *a)
         gen_helper_diag_console_output(tcg_env);
         return nullify_end(ctx);
     }
-    if ((ctx->is_pa20 && a->i == 0x701840) ||
-        (!ctx->is_pa20 && a->i == 0x1a40)) {
-        /* save shadow registers */
-        nullify_over(ctx);
-        gen_helper_putshadowregs(tcg_env);
-        return nullify_end(ctx);
-    }
-    if ((ctx->is_pa20 && a->i == 0x781840) ||
-        (!ctx->is_pa20 && a->i == 0x1a00)) {
-        /* restore shadow registers */
-        return trans_getshadowregs(ctx, NULL);
-    }
 #endif
     qemu_log_mask(LOG_UNIMP, "DIAG opcode 0x%04x ignored\n", a->i);
     return true;
