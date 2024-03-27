@@ -39,6 +39,11 @@ struct vram_buffer {
 };
 
 typedef struct ARTISTState {
+    union {
+        SysBusDevice parent_obj;
+        PCIDevice dev;
+    };
+
     QemuConsole *con;
     MemoryRegion vram_mem;
     MemoryRegion mem_as_root;
@@ -102,12 +107,10 @@ typedef struct ARTISTState {
 } ARTISTState;
 
 struct GSCArtistState {
-    SysBusDevice parent_obj;
     struct ARTISTState artist;
 };
 
 struct PCIArtistState {
-    PCIDevice dev;
     struct ARTISTState artist;
 };
 
@@ -1491,9 +1494,9 @@ sticore:     located at [10/1/4/0]
 #endif
 
     /* XXX: VGA_RAM_SIZE must be a power of two */
-    pci_register_bar(&d->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &s->vram_buffer[ARTIST_BUFFER_AP].mr);
+    pci_register_bar(&s->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &s->vram_buffer[ARTIST_BUFFER_AP].mr);
 
-    pci_set_byte(&d->dev.config[PCI_REVISION_ID], 3);
+    pci_set_byte(&s->dev.config[PCI_REVISION_ID], 3);
 }
 
 static int vmstate_artist_post_load(void *opaque, int version_id)
@@ -1586,9 +1589,9 @@ static void artist_pci_class_init(ObjectClass *klass, void *data)
     k->vendor_id = PCI_VENDOR_ID_HP;
     k->device_id = PCI_DEVICE_ID_HP_VISUALIZE_EG;
     // k->romfile = "vgabios-stdvga.bin";
-    // dc->vmsd = &vmstate_artist;
+    dc->vmsd = &vmstate_artist;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
-    // adevc->build_dev_aml = build_vga_aml;
+    device_class_set_props(dc, artist_properties);
     dc->desc = "HP Visualize EG PCI";
 }
 
