@@ -356,7 +356,7 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
     /* Graphics setup. */
     if (machine->enable_graphics && vga_interface_type != VGA_NONE) {
         vga_interface_created = true;
-        if (1 || lasi_dev) {
+        if (0 || lasi_dev) {
             dev = qdev_new("artist-gsc");
             s = SYS_BUS_DEVICE(dev);
             sysbus_realize_and_unref(s, &error_fatal);
