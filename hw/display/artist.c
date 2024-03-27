@@ -2,7 +2,7 @@
  * QEMU HP Artist Emulation
  *
  * Copyright (c) 2019-2022 Sven Schnelle <svens@stackframe.org>
- * Copyright (c) 2022 Helge Deller <deller@gmx.de>
+ * Copyright (c) 2022-2024 Helge Deller <deller@gmx.de>
  *
  * This work is licensed under the terms of the GNU GPL, version 2 or later.
  */
@@ -14,6 +14,7 @@
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "hw/sysbus.h"
+#include "hw/pci/pci_device.h"
 #include "hw/loader.h"
 #include "hw/qdev-core.h"
 #include "hw/qdev-properties.h"
@@ -25,6 +26,10 @@
 
 #define TYPE_ARTIST "artist"
 OBJECT_DECLARE_SIMPLE_TYPE(ARTISTState, ARTIST)
+
+#define TYPE_ARTIST_PCI "artist-pci"
+OBJECT_DECLARE_SIMPLE_TYPE(ARTIST_PCI_State, ARTIST_PCI)
+
 
 struct vram_buffer {
     MemoryRegion mr;
@@ -43,7 +48,6 @@ struct ARTISTState {
     MemoryRegion reg;
     MemoryRegionSection fbsection;
 
-    void *vram_int_mr;
     AddressSpace as;
 
     struct vram_buffer vram_buffer[16];
@@ -98,6 +102,11 @@ struct ARTISTState {
     uint32_t font_write_pos_y;
 
     int draw_line_pattern;
+};
+
+struct ARTIST_PCI_State {
+    struct ARTISTState artist;
+    PCIDevice dev;
 };
 
 /* hardware allows up to 64x64, but we emulate 32x32 only. */
@@ -1424,6 +1433,46 @@ static void artist_realizefn(DeviceState *dev, Error **errp)
     qemu_console_resize(s->con, s->width, s->height);
 }
 
+static void pci_artist_realize(PCIDevice *dev, Error **errp)
+{
+    ARTIST_PCI_State *d = ARTIST_PCI(dev); // HELGE
+    ARTISTState *s = ARTIST(&d->artist);
+
+    artist_realizefn((DeviceState *)&d->artist, errp);
+
+    // vga_init(s, OBJECT(dev), pci_address_space(dev), pci_address_space_io(dev), true);
+#if 0
+    // 01:04.0 0380: 103c:1005 (rev 03)
+        Control: I/O- Mem+ BusMaster- SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+        Status: Cap- 66MHz+ UDF- FastB2B+ ParErr- DEVSEL=medium >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+        Region 0: Memory at fffffffff8000000 (32-bit, non-prefetchable) [size=32M]
+        Expansion ROM at fffffffff4800000 [disabled] [size=64K]
+        Kernel driver in use: sti
+
+pci 0000:01:04.0: [103c:1005] type 00 class 0x038000 conventional PCI endpoint
+pci 0000:01:04.0: BAR 0 [mem 0xfffffffff8000000-0xfffffffff9ffffff]
+pci 0000:01:04.0: ROM [mem 0xfffffffff4800000-0xfffffffff480ffff pref]
+
+sti 0000:01:04.0: enabling SERR and PARITY (0002 -> 0142)
+sticore: STI PCI graphic ROM found at fffffffff4800000 (64 kB), fb at fffffffff8000000 (32 MB)
+sticore: STI word mode ROM supports 32 bit firmware functions.
+sticore:   id 2d08c0a7-9a02587, conforms to spec rev. 8.0a
+sticore:     built-in font #1: size 8x16, chars 0-255, bpc 16
+sticore:     built-in font #2: size 6x13, chars 0-255, bpc 13
+sticore:     built-in font #3: size 10x20, chars 0-255, bpc 40
+sticore:     using 8x16 framebuffer font VGA8x16
+sticore:     using 32-bit STI ROM functions
+sticore:     graphics card name: PCI_GRAFFITIX1280
+sticore:     located at [10/1/4/0]
+
+#endif
+
+    /* XXX: VGA_RAM_SIZE must be a power of two */
+    pci_register_bar(&d->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &s->vram_buffer[ARTIST_BUFFER_AP].mr);
+
+    pci_set_byte(&d->dev.config[PCI_REVISION_ID], 3);
+}
+
 static int vmstate_artist_post_load(void *opaque, int version_id)
 {
     artist_invalidate(opaque);
@@ -1492,6 +1541,7 @@ static void artist_class_init(ObjectClass *klass, void *data)
     dc->realize = artist_realizefn;
     dc->vmsd = &vmstate_artist;
     dc->reset = artist_reset;
+    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     device_class_set_props(dc, artist_properties);
 }
 
@@ -1503,9 +1553,53 @@ static const TypeInfo artist_info = {
     .class_init    = artist_class_init,
 };
 
+static void artist_pci_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+
+    k->realize = pci_artist_realize;
+    k->vendor_id = PCI_VENDOR_ID_HP;
+    k->device_id = PCI_DEVICE_ID_HP_VISUALIZE_EG;
+    // k->romfile = "vgabios-stdvga.bin";
+    dc->vmsd = &vmstate_artist;
+    set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
+    // adevc->build_dev_aml = build_vga_aml;
+    dc->desc = "HP Visualize EG PCI";
+}
+
+static const TypeInfo artist_pci_type_info = {
+    .name = TYPE_ARTIST_PCI,
+    .parent = TYPE_PCI_DEVICE,
+    .instance_size = sizeof(ARTIST_PCI_State),
+    .class_init = artist_pci_class_init,
+    .interfaces = (InterfaceInfo[]) {
+        { INTERFACE_CONVENTIONAL_PCI_DEVICE },
+        { },
+    },
+};
+
+#if 0
+static void vga_class_init(ObjectClass *klass, void *data)
+{
+    DeviceClass *dc = DEVICE_CLASS(klass);
+    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
+
+    k->realize = pci_artist_realize;
+    k->romfile = "vgabios-stdvga.bin";
+    k->class_id = PCI_CLASS_DISPLAY_VGA;
+    // device_class_set_props(dc, artist_pci_properties);
+    dc->hotpluggable = false;
+
+    /* Expose framebuffer byteorder via QOM */
+    // object_class_property_add_bool(klass, "big-endian-framebuffer", vga_get_big_endian_fb, vga_set_big_endian_fb);
+}
+#endif
+
 static void artist_register_types(void)
 {
     type_register_static(&artist_info);
+    type_register_static(&artist_pci_type_info);
 }
 
 type_init(artist_register_types)

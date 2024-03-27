@@ -356,11 +356,15 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
     /* Graphics setup. */
     if (machine->enable_graphics && vga_interface_type != VGA_NONE) {
         vga_interface_created = true;
-        dev = qdev_new("artist");
-        s = SYS_BUS_DEVICE(dev);
-        sysbus_realize_and_unref(s, &error_fatal);
-        sysbus_mmio_map(s, 0, translate(NULL, LASI_GFX_HPA));
-        sysbus_mmio_map(s, 1, translate(NULL, ARTIST_FB_ADDR));
+        if (0 || lasi_dev) {
+            dev = qdev_new("artist");
+            s = SYS_BUS_DEVICE(dev);
+            sysbus_realize_and_unref(s, &error_fatal);
+            sysbus_mmio_map(s, 0, translate(NULL, LASI_GFX_HPA));
+            sysbus_mmio_map(s, 1, translate(NULL, ARTIST_FB_ADDR));
+        } else {
+            dev = DEVICE(pci_create_simple(pci_bus, -1, "artist-pci"));
+        }
     }
 
     /* Network setup. */

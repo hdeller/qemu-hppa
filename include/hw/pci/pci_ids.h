@@ -180,6 +180,7 @@
 #define PCI_DEVICE_ID_AMD_SCSI           0x2020
 
 #define PCI_VENDOR_ID_HP                 0x103c
+#define PCI_DEVICE_ID_HP_VISUALIZE_EG    0x1005
 
 #define PCI_VENDOR_ID_TI                 0x104c
 
