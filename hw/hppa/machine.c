@@ -329,6 +329,7 @@ static TranslateFn *machine_HP_common_init_cpus(MachineState *machine)
  * Last creation step: Add SCSI discs, NICs, graphics & load firmware
  */
 static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
+                                        PCIBus *pci_bus2,
                                         TranslateFn *translate)
 {
     const char *kernel_filename = machine->kernel_filename;
@@ -363,7 +364,7 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
             sysbus_mmio_map(s, 0, translate(NULL, LASI_GFX_HPA));
             sysbus_mmio_map(s, 1, translate(NULL, ARTIST_FB_ADDR));
         } else {
-            dev = DEVICE(pci_create_simple(pci_bus, -1, "artist-pci"));
+            dev = DEVICE(pci_create_simple(pci_bus2, -1, "artist-pci"));
         }
     }
 
@@ -600,7 +601,7 @@ static void machine_HP_B160L_init(MachineState *machine)
                                                        1));
 
     /* Add SCSI discs, NICs, graphics & load firmware */
-    machine_HP_common_init_tail(machine, pci_bus, translate);
+    machine_HP_common_init_tail(machine, pci_bus, NULL, translate);
 }
 
 static AstroState *astro_init(void)
@@ -618,7 +619,7 @@ static AstroState *astro_init(void)
  */
 static void machine_HP_C3700_init(MachineState *machine)
 {
-    PCIBus *pci_bus;
+    PCIBus *pci_bus, *pci_bus2;
     AstroState *astro;
     DeviceState *astro_dev;
     MemoryRegion *addr_space = get_system_memory();
@@ -641,9 +642,11 @@ static void machine_HP_C3700_init(MachineState *machine)
                                     SYS_BUS_DEVICE(astro_dev), 0));
     pci_bus = PCI_BUS(qdev_get_child_bus(DEVICE(astro->elroy[0]), "pci"));
     assert(pci_bus);
+    pci_bus2 = PCI_BUS(qdev_get_child_bus(DEVICE(astro->elroy[1]), "pci"));
+    assert(pci_bus2);
 
     /* Add SCSI discs, NICs, graphics & load firmware */
-    machine_HP_common_init_tail(machine, pci_bus, translate);
+    machine_HP_common_init_tail(machine, pci_bus, pci_bus /*pci_bus2*/, translate);
 }
 
 static void hppa_machine_reset(MachineState *ms, ShutdownCause reason)
