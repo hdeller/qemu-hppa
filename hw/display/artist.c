@@ -24,12 +24,11 @@
 #include "framebuffer.h"
 #include "qom/object.h"
 
-#define TYPE_ARTIST "artist"
-OBJECT_DECLARE_SIMPLE_TYPE(ARTISTState, ARTIST)
+#define TYPE_ARTIST_GSC "artist-gsc"
+OBJECT_DECLARE_SIMPLE_TYPE(GSCArtistState, ARTIST_GSC)
 
 #define TYPE_ARTIST_PCI "artist-pci"
-OBJECT_DECLARE_SIMPLE_TYPE(ARTIST_PCI_State, ARTIST_PCI)
-
+OBJECT_DECLARE_SIMPLE_TYPE(PCIArtistState, ARTIST_PCI)
 
 struct vram_buffer {
     MemoryRegion mr;
@@ -39,9 +38,7 @@ struct vram_buffer {
     unsigned int height;
 };
 
-struct ARTISTState {
-    SysBusDevice parent_obj;
-
+typedef struct ARTISTState {
     QemuConsole *con;
     MemoryRegion vram_mem;
     MemoryRegion mem_as_root;
@@ -102,12 +99,18 @@ struct ARTISTState {
     uint32_t font_write_pos_y;
 
     int draw_line_pattern;
+} ARTISTState;
+
+struct GSCArtistState {
+    SysBusDevice parent_obj;
+    struct ARTISTState artist;
 };
 
-struct ARTIST_PCI_State {
-    struct ARTISTState artist;
+struct PCIArtistState {
     PCIDevice dev;
+    struct ARTISTState artist;
 };
+
 
 /* hardware allows up to 64x64, but we emulate 32x32 only. */
 #define NGLE_MAX_SPRITE_SIZE    32
@@ -1301,7 +1304,7 @@ static bool artist_screen_enabled(ARTISTState *s)
 static void artist_draw_line(void *opaque, uint8_t *d, const uint8_t *src,
                              int width, int pitch)
 {
-    ARTISTState *s = ARTIST(opaque);
+    ARTISTState *s = opaque;
     uint32_t *cmap, *data = (uint32_t *)d;
     int x;
 
@@ -1337,7 +1340,7 @@ static void artist_update_display(void *opaque)
 
 static void artist_invalidate(void *opaque)
 {
-    ARTISTState *s = ARTIST(opaque);
+    ARTISTState *s = opaque;
     struct vram_buffer *buf = &s->vram_buffer[ARTIST_BUFFER_AP];
 
     memory_region_set_dirty(&buf->mr, 0, buf->size);
@@ -1348,17 +1351,32 @@ static const GraphicHwOps artist_ops = {
     .gfx_update = artist_update_display,
 };
 
-static void artist_initfn(Object *obj)
+static void artist_initfn_common(Object *obj, ARTISTState *s)
 {
-    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
-    ARTISTState *s = ARTIST(obj);
-
     memory_region_init_io(&s->reg, obj, &artist_reg_ops, s, "artist.reg",
                           4 * MiB);
     memory_region_init_io(&s->vram_mem, obj, &artist_vram_ops, s, "artist.vram",
                           8 * MiB);
-    sysbus_init_mmio(sbd, &s->reg);
-    sysbus_init_mmio(sbd, &s->vram_mem);
+}
+
+static void artist_initfn_GSC(Object *obj)
+{
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+    GSCArtistState *s = ARTIST_GSC(obj);
+
+    artist_initfn_common(obj, &s->artist);
+    sysbus_init_mmio(sbd, &s->artist.reg);
+    sysbus_init_mmio(sbd, &s->artist.vram_mem);
+}
+
+static void artist_initfn_PCI(Object *obj)
+{
+    //PCIDevice *d = PCI_DEVICE(obj);
+    PCIArtistState *s = ARTIST_PCI(obj);
+
+    artist_initfn_common(obj, &s->artist);
+    // TODO PCI !!! sysbus_init_mmio(sbd, &s->reg);
+    // sysbus_init_mmio(sbd, &s->vram_mem);
 }
 
 static void artist_create_buffer(ARTISTState *s, const char *name,
@@ -1379,9 +1397,8 @@ static void artist_create_buffer(ARTISTState *s, const char *name,
     *offset += buf->size;
 }
 
-static void artist_realizefn(DeviceState *dev, Error **errp)
+static void artist_realizefn_common(DeviceState *dev, ARTISTState *s, Error **errp)
 {
-    ARTISTState *s = ARTIST(dev);
     struct vram_buffer *buf;
     hwaddr offset = 0;
 
@@ -1433,14 +1450,20 @@ static void artist_realizefn(DeviceState *dev, Error **errp)
     qemu_console_resize(s->con, s->width, s->height);
 }
 
-static void pci_artist_realize(PCIDevice *dev, Error **errp)
+static void artist_realizefn_gsc(DeviceState *dev, Error **errp)
 {
-    ARTIST_PCI_State *d = ARTIST_PCI(dev); // HELGE
-    ARTISTState *s = ARTIST(&d->artist);
+    GSCArtistState *d = ARTIST_GSC(dev);
 
-    artist_realizefn((DeviceState *)&d->artist, errp);
+    artist_realizefn_common(dev, &d->artist, errp);
+}
 
-    // vga_init(s, OBJECT(dev), pci_address_space(dev), pci_address_space_io(dev), true);
+static void artist_realize_pci(PCIDevice *dev, Error **errp)
+{
+    PCIArtistState *d = ARTIST_PCI(dev);
+    ARTISTState *s = &d->artist;
+
+    artist_realizefn_common(DEVICE(dev), s, errp);
+
 #if 0
     // 01:04.0 0380: 103c:1005 (rev 03)
         Control: I/O- Mem+ BusMaster- SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
@@ -1534,23 +1557,24 @@ static void artist_reset(DeviceState *qdev)
 {
 }
 
-static void artist_class_init(ObjectClass *klass, void *data)
+static void artist_gsc_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    dc->realize = artist_realizefn;
+    dc->realize = artist_realizefn_gsc;
     dc->vmsd = &vmstate_artist;
     dc->reset = artist_reset;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     device_class_set_props(dc, artist_properties);
+    dc->desc = "HP Artist GSC graphics";
 }
 
-static const TypeInfo artist_info = {
-    .name          = TYPE_ARTIST,
+static const TypeInfo artist_gsc_info = {
+    .name          = TYPE_ARTIST_GSC,
     .parent        = TYPE_SYS_BUS_DEVICE,
-    .instance_size = sizeof(ARTISTState),
-    .instance_init = artist_initfn,
-    .class_init    = artist_class_init,
+    .instance_size = sizeof(GSCArtistState),
+    .instance_init = artist_initfn_GSC,
+    .class_init    = artist_gsc_class_init,
 };
 
 static void artist_pci_class_init(ObjectClass *klass, void *data)
@@ -1558,20 +1582,21 @@ static void artist_pci_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
-    k->realize = pci_artist_realize;
+    k->realize = artist_realize_pci;
     k->vendor_id = PCI_VENDOR_ID_HP;
     k->device_id = PCI_DEVICE_ID_HP_VISUALIZE_EG;
     // k->romfile = "vgabios-stdvga.bin";
-    dc->vmsd = &vmstate_artist;
+    // dc->vmsd = &vmstate_artist;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     // adevc->build_dev_aml = build_vga_aml;
     dc->desc = "HP Visualize EG PCI";
 }
 
-static const TypeInfo artist_pci_type_info = {
-    .name = TYPE_ARTIST_PCI,
-    .parent = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(ARTIST_PCI_State),
+static const TypeInfo artist_pci_info = {
+    .name       = TYPE_ARTIST_PCI,
+    .parent     = TYPE_PCI_DEVICE,
+    .instance_size = sizeof(PCIArtistState),
+    .instance_init = artist_initfn_PCI,
     .class_init = artist_pci_class_init,
     .interfaces = (InterfaceInfo[]) {
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
@@ -1579,27 +1604,10 @@ static const TypeInfo artist_pci_type_info = {
     },
 };
 
-#if 0
-static void vga_class_init(ObjectClass *klass, void *data)
-{
-    DeviceClass *dc = DEVICE_CLASS(klass);
-    PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
-
-    k->realize = pci_artist_realize;
-    k->romfile = "vgabios-stdvga.bin";
-    k->class_id = PCI_CLASS_DISPLAY_VGA;
-    // device_class_set_props(dc, artist_pci_properties);
-    dc->hotpluggable = false;
-
-    /* Expose framebuffer byteorder via QOM */
-    // object_class_property_add_bool(klass, "big-endian-framebuffer", vga_get_big_endian_fb, vga_set_big_endian_fb);
-}
-#endif
-
 static void artist_register_types(void)
 {
-    type_register_static(&artist_info);
-    type_register_static(&artist_pci_type_info);
+    type_register_static(&artist_gsc_info);
+    type_register_static(&artist_pci_info);
 }
 
 type_init(artist_register_types)
