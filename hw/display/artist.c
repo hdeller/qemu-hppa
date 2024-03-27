@@ -1387,13 +1387,17 @@ static void artist_create_buffer(ARTISTState *s, const char *name,
                                  int width, int height)
 {
     struct vram_buffer *buf = s->vram_buffer + idx;
+    uint64_t size;
 
-    memory_region_init_ram(&buf->mr, OBJECT(s), name, width * height,
-                           &error_fatal);
+    size = width * height;
+    if (1 || idx == ARTIST_BUFFER_AP) {
+        size = pow2ceil(size);
+    }
+    memory_region_init_ram(&buf->mr, OBJECT(s), name, size, &error_fatal);
     memory_region_add_subregion_overlap(&s->mem_as_root, *offset, &buf->mr, 0);
 
     buf->data = memory_region_get_ram_ptr(&buf->mr);
-    buf->size = height * width;
+    buf->size = size;
     buf->width = width;
     buf->height = height;
 
