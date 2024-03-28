@@ -1390,9 +1390,6 @@ static void artist_create_buffer(ARTISTState *s, const char *name,
     uint64_t size;
 
     size = width * height;
-    if (1 || idx == ARTIST_BUFFER_AP) {
-        size = pow2ceil(size);
-    }
     memory_region_init_ram(&buf->mr, OBJECT(s), name, size, &error_fatal);
     memory_region_add_subregion_overlap(&s->mem_as_root, *offset, &buf->mr, 0);
 
@@ -1421,7 +1418,7 @@ static void artist_realizefn_common(DeviceState *dev, ARTISTState *s, Error **er
         s->height = MAX(s->height, 480);
     }
 
-    memory_region_init(&s->mem_as_root, OBJECT(dev), "artist", ~0ull);
+    memory_region_init(&s->mem_as_root, OBJECT(dev), "artist", 32 * MiB);
     address_space_init(&s->as, &s->mem_as_root, "artist");
 
     artist_create_buffer(s, "cmap", &offset, ARTIST_BUFFER_CMAP, 2048, 4);
@@ -1498,7 +1495,7 @@ sticore:     located at [10/1/4/0]
 #endif
 
     /* XXX: VGA_RAM_SIZE must be a power of two */
-    pci_register_bar(&s->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &s->vram_buffer[ARTIST_BUFFER_AP].mr);
+    pci_register_bar(&s->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &s->mem_as_root);
 
     pci_set_byte(&s->dev.config[PCI_REVISION_ID], 3);
 }
