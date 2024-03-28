@@ -83,9 +83,7 @@ struct AstroState {
     struct ElroyState *elroy[ELROY_NUM];
 
     MemoryRegion this_mem;
-
-    MemoryRegion pci_mmio;
-    MemoryRegion pci_io;
+    MemoryRegion lmmio_direct[4];
 
     IOMMUMemoryRegion iommu;
     AddressSpace iommu_as;

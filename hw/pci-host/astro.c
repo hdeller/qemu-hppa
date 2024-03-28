@@ -526,6 +526,46 @@ static ElroyState *elroy_init(int num)
  * Astro Runway chip.
  */
 
+static void adjust_LMMIO_DIRECT_mapping(AstroState *s, unsigned int reg_index)
+{
+    MemoryRegion *lmmio_alias;
+    unsigned int lmmio_index, map_route;
+    uint32_t map_addr, map_size;
+    struct ElroyState *elroy;
+
+    /* pointer to LMMIO_DIRECT entry */
+    lmmio_index = reg_index / 3;
+    lmmio_alias = &s->lmmio_direct[lmmio_index];
+
+    map_addr  = s->ioc_ranges[3 * lmmio_index + 0];
+    map_size  = s->ioc_ranges[3 * lmmio_index + 1];
+    map_route = s->ioc_ranges[3 * lmmio_index + 2];
+
+    /* find elroy to which this address is routed */
+    map_route &= (ELROY_NUM - 1);
+    elroy = s->elroy[map_route];
+
+    if (lmmio_alias->enabled) {
+        memory_region_del_subregion(get_system_memory(), lmmio_alias);
+    }
+
+    /* is mapping enabled? */
+    if ((map_addr & 1) == 0) {
+        return;
+    }
+    map_addr &= TARGET_PAGE_MASK;
+    map_size = (~map_size) + 1;
+    map_size &= TARGET_PAGE_MASK;
+    fprintf(stderr, "MAPPING LMMIO%d at %x size %x on elroy%d\n",
+        lmmio_index, map_addr, map_size, map_route);
+
+    memory_region_init_alias(lmmio_alias, OBJECT(elroy),
+                        "pci-lmmmio-alias", &elroy->pci_mmio,
+                        map_addr, map_size);
+    memory_region_add_subregion(get_system_memory(), map_addr,
+                                 lmmio_alias);
+}
+
 static MemTxResult astro_chip_read_with_attrs(void *opaque, hwaddr addr,
                                              uint64_t *data, unsigned size,
                                              MemTxAttrs attrs)
@@ -617,6 +657,7 @@ static MemTxResult astro_chip_write_with_attrs(void *opaque, hwaddr addr,
 {
     MemTxResult ret = MEMTX_OK;
     AstroState *s = opaque;
+    unsigned int index;
 
     trace_astro_chip_write(addr, size, val);
 
@@ -633,6 +674,11 @@ static MemTxResult astro_chip_write_with_attrs(void *opaque, hwaddr addr,
         break;
     case 0x0300 ... 0x03d8 - 1: /* LMMIO_DIRECT0_BASE... */
         put_val_in_arrary(s->ioc_ranges, 0x300, addr, size, val);
+        index = (addr - 0x300) / 8;
+        /* check if one of the 4 LMMIO_DIRECT regs, each using 3 entries. */
+        if (index < 4 * 3) {
+            adjust_LMMIO_DIRECT_mapping(s, index);
+        }
         break;
     case 0x10200:
     case 0x10220:
