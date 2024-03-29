@@ -112,6 +112,8 @@ struct GSCArtistState {
 
 struct PCIArtistState {
     struct ARTISTState artist;
+
+    MemoryRegion pci_mmio;
 };
 
 
@@ -1374,12 +1376,12 @@ static void artist_initfn_GSC(Object *obj)
 
 static void artist_initfn_PCI(Object *obj)
 {
-    //PCIDevice *d = PCI_DEVICE(obj);
     PCIArtistState *s = ARTIST_PCI(obj);
 
     artist_initfn_common(obj, &s->artist);
-    // TODO PCI !!! sysbus_init_mmio(sbd, &s->reg);
-    // sysbus_init_mmio(sbd, &s->vram_mem);
+    memory_region_init(&s->pci_mmio, OBJECT(obj), "artist-mmio", 32 * MiB);
+    memory_region_add_subregion(&s->pci_mmio, 0, &s->artist.reg);
+    memory_region_add_subregion(&s->pci_mmio, 16 * MiB, &s->artist.vram_mem);
 }
 
 static void artist_create_buffer(ARTISTState *s, const char *name,
@@ -1468,35 +1470,7 @@ static void artist_realize_pci(PCIDevice *dev, Error **errp)
 
     artist_realizefn_common(DEVICE(dev), s, errp);
 
-#if 0
-    // 01:04.0 0380: 103c:1005 (rev 03)
-        Control: I/O- Mem+ BusMaster- SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
-        Status: Cap- 66MHz+ UDF- FastB2B+ ParErr- DEVSEL=medium >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
-        Region 0: Memory at fffffffff8000000 (32-bit, non-prefetchable) [size=32M]
-        Expansion ROM at fffffffff4800000 [disabled] [size=64K]
-        Kernel driver in use: sti
-
-pci 0000:01:04.0: [103c:1005] type 00 class 0x038000 conventional PCI endpoint
-pci 0000:01:04.0: BAR 0 [mem 0xfffffffff8000000-0xfffffffff9ffffff]
-pci 0000:01:04.0: ROM [mem 0xfffffffff4800000-0xfffffffff480ffff pref]
-
-sti 0000:01:04.0: enabling SERR and PARITY (0002 -> 0142)
-sticore: STI PCI graphic ROM found at fffffffff4800000 (64 kB), fb at fffffffff8000000 (32 MB)
-sticore: STI word mode ROM supports 32 bit firmware functions.
-sticore:   id 2d08c0a7-9a02587, conforms to spec rev. 8.0a
-sticore:     built-in font #1: size 8x16, chars 0-255, bpc 16
-sticore:     built-in font #2: size 6x13, chars 0-255, bpc 13
-sticore:     built-in font #3: size 10x20, chars 0-255, bpc 40
-sticore:     using 8x16 framebuffer font VGA8x16
-sticore:     using 32-bit STI ROM functions
-sticore:     graphics card name: PCI_GRAFFITIX1280
-sticore:     located at [10/1/4/0]
-
-#endif
-
-    /* XXX: VGA_RAM_SIZE must be a power of two */
-    pci_register_bar(&s->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &s->mem_as_root);
-
+    pci_register_bar(&s->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &d->pci_mmio);
     pci_set_byte(&s->dev.config[PCI_REVISION_ID], 3);
 }
 

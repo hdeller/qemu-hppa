@@ -530,7 +530,8 @@ static void adjust_LMMIO_DIRECT_mapping(AstroState *s, unsigned int reg_index)
 {
     MemoryRegion *lmmio_alias;
     unsigned int lmmio_index, map_route;
-    uint32_t map_addr, map_size;
+    hwaddr map_addr;
+    uint32_t map_size;
     struct ElroyState *elroy;
 
     /* pointer to LMMIO_DIRECT entry */
@@ -553,15 +554,16 @@ static void adjust_LMMIO_DIRECT_mapping(AstroState *s, unsigned int reg_index)
     if ((map_addr & 1) == 0) {
         return;
     }
+    map_addr = F_EXTEND(map_addr);
     map_addr &= TARGET_PAGE_MASK;
     map_size = (~map_size) + 1;
     map_size &= TARGET_PAGE_MASK;
-    fprintf(stderr, "MAPPING LMMIO%d at %x size %x on elroy%d\n",
+    fprintf(stderr, "MAPPING LMMIO%d at %lx size %x on elroy%d\n",
         lmmio_index, map_addr, map_size, map_route);
 
     memory_region_init_alias(lmmio_alias, OBJECT(elroy),
                         "pci-lmmmio-alias", &elroy->pci_mmio,
-                        map_addr, map_size);
+                        (uint32_t) map_addr, map_size);
     memory_region_add_subregion(get_system_memory(), map_addr,
                                  lmmio_alias);
 }
