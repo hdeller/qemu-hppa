@@ -1591,7 +1591,7 @@ static void artist_pci_class_init(ObjectClass *klass, void *data)
     k->device_id = PCI_DEVICE_ID_HP_VISUALIZE_EG;
     k->subsystem_vendor_id = PCI_VENDOR_ID_HP;
     k->class_id = PCI_CLASS_DISPLAY_OTHER;
-    // k->romfile = "vgabios-stdvga.bin";
+    k->romfile = "artist-pci.rom";
     dc->vmsd = &vmstate_artist;
     set_bit(DEVICE_CATEGORY_DISPLAY, dc->categories);
     device_class_set_props(dc, artist_properties);
