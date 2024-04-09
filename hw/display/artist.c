@@ -1379,9 +1379,6 @@ static void artist_initfn_PCI(Object *obj)
     PCIArtistState *s = ARTIST_PCI(obj);
 
     artist_initfn_common(obj, &s->artist);
-    memory_region_init(&s->pci_mmio, OBJECT(obj), "artist-mmio", 32 * MiB);
-    memory_region_add_subregion(&s->pci_mmio, 0, &s->artist.reg);
-    memory_region_add_subregion(&s->pci_mmio, 16 * MiB, &s->artist.vram_mem);
 }
 
 static void artist_create_buffer(ARTISTState *s, const char *name,
@@ -1469,6 +1466,12 @@ static void artist_realize_pci(PCIDevice *dev, Error **errp)
     ARTISTState *s = &d->artist;
 
     artist_realizefn_common(DEVICE(dev), s, errp);
+
+    memory_region_init(&d->pci_mmio, OBJECT(dev), "artist-mmio", 32 * MiB);
+    // memory_region_add_subregion(&s->pci_mmio, 0, &s->artist.reg);
+    memory_region_add_subregion(&d->pci_mmio, 0, &s->dev.rom);
+    fprintf(stderr, "ROMSIZE *************************************************************************   %x\n", s->dev.romsize);
+    memory_region_add_subregion(&d->pci_mmio, 16 * MiB, &s->vram_mem);
 
     pci_register_bar(&s->dev, 0, PCI_BASE_ADDRESS_MEM_TYPE_32, &d->pci_mmio);
     pci_set_byte(&s->dev.config[PCI_REVISION_ID], 3);
