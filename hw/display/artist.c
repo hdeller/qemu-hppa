@@ -1182,6 +1182,7 @@ static uint64_t artist_reg_read(void *opaque, hwaddr addr, unsigned size)
         if (s->depth == 1) {
             val |= 1 << 31;
         }
+fprintf(stderr, "ARTIST SIZE %x   %dx%d\n", val, s->width, s->height);
         break;
 
     case 0x100000:
@@ -1417,7 +1418,7 @@ static void artist_realizefn_common(DeviceState *dev, ARTISTState *s, Error **er
         s->height = MAX(s->height, 480);
     }
 
-    memory_region_init(&s->mem_as_root, OBJECT(dev), "artist", 32 * MiB);
+    memory_region_init(&s->mem_as_root, OBJECT(dev), "artist", ~0ull);
     address_space_init(&s->as, &s->mem_as_root, "artist");
 
     artist_create_buffer(s, "cmap", &offset, ARTIST_BUFFER_CMAP, 2048, 4);
