@@ -1340,7 +1340,7 @@ static const struct pa_opcode pa_opcodes[] =
 /* These may be specific to certain versions of the PA.  Joel claimed
    they were 72000 (7200?) specific.  However, I'm almost certain the
    mtcpu/mfcpu were undocumented, but available in the older 700 machines.  */
-{ "mfcpu",	0x14000600, 0xfc00ffff, "x,^", pa10, 0},
+{ "mfdiag_pcxl",0x14000600, 0xfc00ffff, "9,x", pa10, 0},
 { "mtcpu",	0x14001600, 0xfc00ffff, "x,^", pa10, 0},
 { "mfcpu",	0x14001A00, 0xfc00ffff, "^,x", pa10, 0},
 { "tocen",	0x14403600, 0xffffffff, "", pa10, 0},
@@ -1349,26 +1349,6 @@ static const struct pa_opcode pa_opcodes[] =
 { "grshdw",	0x14400620, 0xffffffff, "", pa10, 0},
 
 { "diag",	0x14000000, 0xfc000000, "D   x,9,t", pa10, 0},
-
-#if 0
-0x00194de0:   14 40 08 bc   diag 4008bc
-0x00194de4:   00 00 0d 60   ssm 0,r0
-----------------
-0x00194de8:   f7 80 05 bf   depdi 0,50,1,ret0
-0x00194dec:   14 5c 18 40   diag 5c1840
-
-
-
-#define DIAG_CODE(code)         (0x14000000 + ((code)<<5))
-
-#define MFCPU_X(rDiagReg, t_ch, t_th, code) \
-        (DIAG_CODE(code) + ((rDiagReg)<<21) + ((t_ch)<<16) + ((t_th)<<0) )
-  
-#define MTCPU(dr, gr)           MFCPU_X(dr, gr,  0, 0x12)       /* move value of gr to dr[dr] */
-#define MFCPU_C(dr, gr)         MFCPU_X(dr, gr,  0, 0x30)       /* for dr0 and dr8 only ! */
-#define MFCPU_T(dr, gr)         MFCPU_X(dr,  0, gr, 0xa0)       /* all dr except dr0 and dr8 */
-#endif
-
 
 /* gfw and gfr are not in the HP PA 1.1 manual, but they are in either
    the Timex FPU or the Mustang ERS (not sure which) manual.  */
