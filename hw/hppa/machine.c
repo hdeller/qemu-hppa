@@ -661,6 +661,12 @@ static void hppa_machine_reset(MachineState *ms, ShutdownCause reason)
 
         cs->exception_index = -1;
         cs->halted = 0;
+
+        /* reset diagnose registers and enable sr-hashing */
+        memset(&cpu[i]->env.dr, 0, sizeof(cpu[i]->env.dr));
+        if (hppa_is_pa20(&cpu[0]->env)) {
+            cpu[i]->env.dr[2] = 0x200; /* DIAG_SPHASH_ENAB (bit 54) */
+        }
     }
 
     /* already initialized by machine_hppa_init()? */
