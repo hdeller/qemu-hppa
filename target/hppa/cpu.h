@@ -307,29 +307,34 @@ static inline int HPPA_BTLB_ENTRIES(CPUHPPAState *env)
 
 void hppa_translate_init(void);
 
+#define HPPA_GVA_OFFSET_MASK64 0x301fffffffffffff
+#define HPPA64_DIAG_SPHASH_ENAB 0x200   /* DIAG_SPHASH_ENAB (bit 54) */
 #define CPU_RESOLVING_TYPE TYPE_HPPA_CPU
 
-static inline uint64_t gva_offset_mask(target_ulong psw)
+static inline uint64_t gva_offset_mask(CPUHPPAState *env, target_ulong psw)
 {
+    uint64_t mask64 = MAKE_64BIT_MASK(0, 62);
+    if (hppa_is_pa20(env) && (env->dr[2] & HPPA64_DIAG_SPHASH_ENAB)) {
+        mask64 = HPPA_GVA_OFFSET_MASK64;
+    }
     return (psw & PSW_W
-            ? MAKE_64BIT_MASK(0, 62)
-            : MAKE_64BIT_MASK(0, 32));
+            ? mask64 : MAKE_64BIT_MASK(0, 32));
 }
 
-static inline target_ulong hppa_form_gva_psw(target_ulong psw, uint64_t spc,
-                                             target_ulong off)
+static inline target_ulong hppa_form_gva_psw(CPUHPPAState *env, target_ulong psw,
+                                             uint64_t spc, target_ulong off)
 {
 #ifdef CONFIG_USER_ONLY
     return off;
 #else
-    return spc | (off & gva_offset_mask(psw));
+    return spc | (off & gva_offset_mask(env, psw));
 #endif
 }
 
 static inline target_ulong hppa_form_gva(CPUHPPAState *env, uint64_t spc,
                                          target_ulong off)
 {
-    return hppa_form_gva_psw(env->psw, spc, off);
+    return hppa_form_gva_psw(env, env->psw, spc, off);
 }
 
 hwaddr hppa_abs_to_phys_pa2_w0(vaddr addr);

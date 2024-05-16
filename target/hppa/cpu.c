@@ -43,7 +43,7 @@ static vaddr hppa_cpu_get_pc(CPUState *cs)
 {
     CPUHPPAState *env = cpu_env(cs);
 
-    return hppa_form_gva_psw(env->psw, (env->psw & PSW_C ? env->iasq_f : 0),
+    return hppa_form_gva_psw(env, env->psw, (env->psw & PSW_C ? env->iasq_f : 0),
                              env->iaoq_f & -4);
 }
 
