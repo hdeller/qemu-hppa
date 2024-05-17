@@ -40,13 +40,14 @@
 
 typedef struct PCIMultiSerialState {
     PCIDevice    dev;
-    MemoryRegion iobar;
+    MemoryRegion iobar, membar;
     uint32_t     ports;
     char         *name[PCI_SERIAL_MAX_PORTS];
     SerialState  state[PCI_SERIAL_MAX_PORTS];
     uint32_t     level[PCI_SERIAL_MAX_PORTS];
     qemu_irq     *irqs;
     uint8_t      prog_if;
+    uint32_t     mmio;
 } PCIMultiSerialState;
 
 static void multi_serial_pci_exit(PCIDevice *dev)
@@ -101,7 +102,14 @@ static void multi_serial_pci_realize(PCIDevice *dev, Error **errp)
     pci->dev.config[PCI_CLASS_PROG] = pci->prog_if;
     pci->dev.config[PCI_INTERRUPT_PIN] = 0x01;
     memory_region_init(&pci->iobar, OBJECT(pci), "multiserial", 8 * nports);
-    pci_register_bar(&pci->dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &pci->iobar);
+    memory_region_init_alias(&pci->membar, OBJECT(pci), "multiserial-mm",
+                             &pci->iobar, 0, 8 * nports);
+    if (pci->mmio) {
+        pci_register_bar(&pci->dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
+                         &pci->membar);
+    } else {
+        pci_register_bar(&pci->dev, 0, PCI_BASE_ADDRESS_SPACE_IO, &pci->iobar);
+    }
     pci->irqs = qemu_allocate_irqs(multi_serial_irq_mux, pci, nports);
 
     for (i = 0; i < nports; i++) {
@@ -136,6 +144,7 @@ static Property multi_2x_serial_pci_properties[] = {
     DEFINE_PROP_CHR("chardev1",  PCIMultiSerialState, state[0].chr),
     DEFINE_PROP_CHR("chardev2",  PCIMultiSerialState, state[1].chr),
     DEFINE_PROP_UINT8("prog_if",  PCIMultiSerialState, prog_if, 0x02),
+    DEFINE_PROP_BIT("mmio", PCIMultiSerialState, mmio, 0, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
@@ -145,6 +154,7 @@ static Property multi_4x_serial_pci_properties[] = {
     DEFINE_PROP_CHR("chardev3",  PCIMultiSerialState, state[2].chr),
     DEFINE_PROP_CHR("chardev4",  PCIMultiSerialState, state[3].chr),
     DEFINE_PROP_UINT8("prog_if",  PCIMultiSerialState, prog_if, 0x02),
+    DEFINE_PROP_BIT("mmio", PCIMultiSerialState, mmio, 0, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
