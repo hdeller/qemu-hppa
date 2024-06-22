@@ -707,7 +707,7 @@ static void hppa_machine_reset(MachineState *ms, ShutdownCause reason)
         /* reset diagnose registers and enable sr-hashing */
         memset(&cpu[i]->env.dr, 0, sizeof(cpu[i]->env.dr));
         if (hppa_is_pa20(&cpu[0]->env)) {
-            cpu[i]->env.dr[2] = HPPA64_DIAG_SPHASH_ENAB;
+            cpu[i]->env.dr[2] = HPPA64_DIAG_SPHASH_ENABLE;
         }
     }
 
