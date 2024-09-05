@@ -55,6 +55,7 @@ abi_long target_mremap(abi_ulong old_addr, abi_ulong old_size,
                        abi_ulong new_addr);
 abi_long target_madvise(abi_ulong start, abi_ulong len_in, int advice);
 abi_ulong mmap_find_vma(abi_ulong, abi_ulong, abi_ulong);
+abi_ulong mmap_find_vma_downwards(abi_ulong, abi_ulong, abi_ulong);
 void mmap_fork_start(void);
 void mmap_fork_end(int child);
 

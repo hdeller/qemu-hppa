@@ -427,7 +427,136 @@ static abi_ulong mmap_find_vma_reserved(abi_ulong start, abi_ulong size,
 
 /*
  * Find and reserve a free memory area of size 'size'. The search
- * starts at 'start'.
+ * starts at highest address downwards.
+ * It must be called with mmap_lock() held.
+ * Return -1 if error.
+ * See /proc/sys/mm/legacy_va_layout sysctl knob and
+ * https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9dabf60dc4abe6e06bebcc2ee46b4d76ec8741f2
+ * for details.
+ */
+abi_ulong mmap_find_vma_downwards(abi_ulong start, abi_ulong size, abi_ulong align)
+{
+    int host_page_size = qemu_real_host_page_size();
+    void *ptr, *prev;
+    abi_ulong addr;
+    int wrapped, repeat;
+
+    align = MAX(align, host_page_size);
+
+    /* If 'start' == 0, then a default start address is used. */
+    if (start == 0) {
+        start = 0xf8000000;
+    } else {
+        start &= -host_page_size;
+    }
+    start = ROUND_UP(start, align);
+    size = ROUND_UP(size, host_page_size);
+    start -= size;
+
+    if (reserved_va) {
+        return mmap_find_vma_reserved(start, size, align);
+    }
+
+    addr = start;
+    wrapped = repeat = 0;
+    prev = 0;
+
+    for (;; prev = ptr) {
+        /*
+         * Reserve needed memory area to avoid a race.
+         * It should be discarded using:
+         *  - mmap() with MAP_FIXED flag
+         *  - mremap() with MREMAP_FIXED flag
+         *  - shmat() with SHM_REMAP flag
+         */
+        ptr = mmap(g2h_untagged(addr), size, PROT_NONE,
+                   MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
+
+        /* ENOMEM, if host address space has no memory */
+        if (ptr == MAP_FAILED) {
+            return (abi_ulong)-1;
+        }
+
+        /*
+         * Count the number of sequential returns of the same address.
+         * This is used to modify the search algorithm below.
+         */
+        repeat = (ptr == prev ? repeat + 1 : 0);
+
+        if (h2g_valid(ptr + size - 1)) {
+            addr = h2g(ptr);
+
+            if ((addr & (align - 1)) == 0) {
+                /* Success.  */
+#if 0
+                if (start == mmap_next_start && addr >= task_unmapped_base) {
+                    mmap_next_start = addr + size;
+                }
+#endif
+                return addr;
+            }
+
+            /* The address is not properly aligned for the target.  */
+            switch (repeat) {
+            case 0:
+                /*
+                 * Assume the result that the kernel gave us is the
+                 * first with enough free space, so start again at the
+                 * next higher target page.
+                 */
+                addr -= host_page_size;
+                break;
+            case 1:
+                /*
+                 * Sometimes the kernel decides to perform the allocation
+                 * at the top end of memory instead.
+                 */
+                addr &= -align;
+                break;
+            case 2:
+                /* Start over at high memory.  */
+                addr = 0xf0000000;
+                break;
+            default:
+                /* Fail.  This unaligned block must the last.  */
+                addr = -1;
+                break;
+            }
+        } else {
+            /*
+             * Since the result the kernel gave didn't fit, start
+             * again at high memory.  If any repetition, fail.
+             */
+            addr = (repeat ? -1 : 0xf0000000);
+        }
+
+        /* Unmap and try again.  */
+        munmap(ptr, size);
+
+        /* ENOMEM if we checked the whole of the target address space.  */
+        if (addr == (abi_ulong)-1) {
+            return (abi_ulong)-1;
+        } else if (addr == 0) {
+            if (wrapped) {
+                return (abi_ulong)-1;
+            }
+            wrapped = 1;
+            /*
+             * Don't actually use 0 when wrapping, instead indicate
+             * that we'd truly like an allocation in low memory.
+             */
+            addr = (mmap_min_addr > TARGET_PAGE_SIZE
+                     ? TARGET_PAGE_ALIGN(mmap_min_addr)
+                     : TARGET_PAGE_SIZE);
+        } else if (wrapped && addr >= start) {
+            return (abi_ulong)-1;
+        }
+    }
+}
+
+/*
+ * Find and reserve a free memory area of size 'size'. The search
+ * starts at lowest address 'start'.
  * It must be called with mmap_lock() held.
  * Return -1 if error.
  */
@@ -442,7 +571,11 @@ abi_ulong mmap_find_vma(abi_ulong start, abi_ulong size, abi_ulong align)
 
     /* If 'start' == 0, then a default start address is used. */
     if (start == 0) {
-        start = mmap_next_start;
+        if (!TARGET_HPPA) { // STACK_GROWS_DOWN  || LEGACY_VA_LAYOUT
+            start = mmap_next_start;
+        } else {
+            return mmap_find_vma_downwards(start, size, align);
+        }
     } else {
         start &= -host_page_size;
     }
