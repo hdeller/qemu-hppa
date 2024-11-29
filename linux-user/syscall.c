@@ -1996,6 +1996,18 @@ static inline abi_long host_to_target_cmsg(struct target_msghdr *target_msgh,
                     (void *) &errh->offender, sizeof(errh->offender));
                 break;
             }
+            case IP_PKTINFO:
+            {
+                struct in_pktinfo *pkti = data;
+                struct in_pktinfo *target_pkti = target_data;
+
+                __put_user(pkti->ipi_ifindex, &target_pkti->ipi_ifindex);
+                host_to_target_sockaddr((unsigned long) &target_pkti->ipi_spec_dst,
+                    (void *) &pkti->ipi_spec_dst, sizeof(pkti->ipi_spec_dst));
+                host_to_target_sockaddr((unsigned long) &target_pkti->ipi_addr,
+                    (void *) &pkti->ipi_addr, sizeof(pkti->ipi_addr));
+                break;
+            }
             default:
                 goto unimplemented;
             }
