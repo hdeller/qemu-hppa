@@ -1,3 +1,6 @@
+config NS87560_SUPERIO
+    bool
+
 config HPPA_B160L
     bool
     default y
@@ -21,3 +24,4 @@ config HPPA_B160L
     select LASIPS2
     select PARALLEL
     select ARTIST
+    select NS87560_SUPERIO
