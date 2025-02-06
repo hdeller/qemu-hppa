@@ -1,4 +1,6 @@
 config NS87560_SUPERIO
+    select ISA_SUPERIO
+    select FDC_ISA
     bool
 
 config HPPA_B160L
