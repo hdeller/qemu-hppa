@@ -22,7 +22,6 @@
 #include "migration/vmstate.h"
 #include "hw/ide/pci.h"
 
-#include "qemu/osdep.h"
 #include "hw/isa/vt82c686.h"
 #include "hw/block/fdc.h"
 #include "hw/char/parallel-isa.h"
@@ -504,8 +503,8 @@ struct NS_ISAState {
     qemu_irq cpu_intr;
     qemu_irq *isa_irqs_in;
     uint16_t irq_state[ISA_NUM_IRQS];
-    ViaSuperIOState via_sio;
     PCIIDEState ide;
+    ViaSuperIOState via_sio;
     UHCIState uhci[2];
     ViaPMState pm;
 };
@@ -524,9 +523,9 @@ static void ns87560_isa_init(Object *obj)
 {
     NS_ISAState *s = NS87560_ISA(obj);
 
-    object_initialize_child(obj, "ide", &s->ide, "cmd646-ide");
-    object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_NS87560b_USB_UHCI);
-    object_initialize_child(obj, "uhci2", &s->uhci[1], TYPE_NS87560b_USB_UHCI);
+    // object_initialize_child(obj, "ide", &s->ide, "cmd646-ide");
+    // object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_NS87560b_USB_UHCI);
+    // object_initialize_child(obj, "uhci2", &s->uhci[1], TYPE_NS87560b_USB_UHCI);
 }
 
 static const TypeInfo ns87560_isa_info = {
@@ -534,7 +533,7 @@ static const TypeInfo ns87560_isa_info = {
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(NS_ISAState),
     .instance_init = ns87560_isa_init,
-    .abstract      = true,
+    // .abstract      = true,
     .interfaces    = (InterfaceInfo[]) {
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { },
@@ -633,7 +632,7 @@ static void ns87560_isa_realize(PCIDevice *d, Error **errp)
 
     s->isa_irqs_in = i8259_init(isa_bus, &s->i8259_irq);
     isa_bus_register_input_irqs(isa_bus, s->isa_irqs_in);
-    i8254_pit_init(isa_bus, 0x40, 0, NULL);
+    // i8254_pit_init(isa_bus, 0x40, 0, NULL);
     // i8257_dma_init(OBJECT(d), isa_bus, 0);
 
     for (i = 0; i < PCI_CONFIG_HEADER_SIZE; i++) {
@@ -681,7 +680,7 @@ static void ns87560b_write_config(PCIDevice *d, uint32_t addr,
 
     // trace_ns87560_isa_write(addr, val, len);
     pci_default_write_config(d, addr, val, len);
-    if (addr == 0x85) {
+    if (0 && addr == 0x85) {
         /* BIT(1): enable or disable superio config io ports */
         ns_superio_io_enable(&s->via_sio, val & BIT(1));
     }
@@ -725,7 +724,7 @@ static void ns87560b_class_init(ObjectClass *klass, void *data)
     k->realize = ns87560_isa_realize;
     k->config_write = ns87560b_write_config;
     k->vendor_id = PCI_VENDOR_ID_NS;
-    k->device_id = PCI_DEVICE_ID_VIA_82C686B_ISA;
+    k->device_id = PCI_DEVICE_ID_NS_87560_LIO;
     k->class_id = PCI_CLASS_BRIDGE_ISA;
     k->revision = 0x40;
     device_class_set_legacy_reset(dc, ns87560b_isa_reset);
@@ -759,10 +758,13 @@ void create_NS_87560_superio(PCIBus *pci_bus, int major)
 {
     PCIDevice *pci_dev;
 
-    /* function 0 is a PCI IDE Controller */
-    pci_dev = pci_new_multifunction(PCI_DEVFN(major, 0), "cmd646-ide");
-    // qdev_prop_set_chr(DEVICE(pci_dev), "chardev1", serial_hd(0));
+    pci_dev = pci_new_multifunction(PCI_DEVFN(major, 0), TYPE_NS87560_ISA);
     pci_realize_and_unref(pci_dev, pci_bus, &error_fatal);
+
+    /* function 0 is a PCI IDE Controller */
+    //pci_dev = pci_new_multifunction(PCI_DEVFN(major, 0), "cmd646-ide");
+    // qdev_prop_set_chr(DEVICE(pci_dev), "chardev1", serial_hd(0));
+    // pci_realize_and_unref(pci_dev, pci_bus, &error_fatal);
 
     /* function 1 is a SuperIO chip */
 
