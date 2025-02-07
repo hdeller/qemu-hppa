@@ -252,7 +252,7 @@ static void via_pm_class_init(ObjectClass *klass, void *data)
 
     k->realize = via_pm_realize;
     k->config_write = pm_write_config;
-    k->vendor_id = PCI_VENDOR_ID_VIA;
+    k->vendor_id = PCI_VENDOR_ID_NS;
     k->device_id = info->device_id;
     k->class_id = PCI_CLASS_BRIDGE_OTHER;
     k->revision = 0x40;
@@ -286,8 +286,8 @@ static const TypeInfo vt82c686b_pm_info = {
     .class_data    = (void *)&vt82c686b_pm_init_info,
 };
 
-#define TYPE_VIA_SUPERIO "via-superio"
-OBJECT_DECLARE_SIMPLE_TYPE(ViaSuperIOState, VIA_SUPERIO)
+#define TYPE_NS87560_SUPERIO "NS87560-superio"
+OBJECT_DECLARE_SIMPLE_TYPE(ViaSuperIOState, NS87560_SUPERIO)
 
 struct ViaSuperIOState {
     ISASuperIODevice superio;
@@ -303,7 +303,7 @@ static inline void via_superio_io_enable(ViaSuperIOState *s, bool enable)
 
 static void via_superio_realize(DeviceState *d, Error **errp)
 {
-    ViaSuperIOState *s = VIA_SUPERIO(d);
+    ViaSuperIOState *s = NS87560_SUPERIO(d);
     ISASuperIOClass *ic = ISA_SUPERIO_GET_CLASS(s);
     Error *local_err = NULL;
 
@@ -357,7 +357,7 @@ static void via_superio_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo via_superio_info = {
-    .name          = TYPE_VIA_SUPERIO,
+    .name          = TYPE_NS87560_SUPERIO,
     .parent        = TYPE_ISA_SUPERIO,
     .instance_size = sizeof(ViaSuperIOState),
     .class_size    = sizeof(ISASuperIOClass),
@@ -431,7 +431,7 @@ static const MemoryRegionOps vt82c686b_superio_cfg_ops = {
 
 static void vt82c686b_superio_reset(DeviceState *dev)
 {
-    ViaSuperIOState *s = VIA_SUPERIO(dev);
+    ViaSuperIOState *s = NS87560_SUPERIO(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
     /* Device ID */
@@ -463,7 +463,7 @@ static void vt82c686b_superio_reset(DeviceState *dev)
 
 static void vt82c686b_superio_init(Object *obj)
 {
-    VIA_SUPERIO(obj)->io_ops = &vt82c686b_superio_cfg_ops;
+    NS87560_SUPERIO(obj)->io_ops = &vt82c686b_superio_cfg_ops;
 }
 
 static void vt82c686b_superio_class_init(ObjectClass *klass, void *data)
@@ -480,7 +480,7 @@ static void vt82c686b_superio_class_init(ObjectClass *klass, void *data)
 
 static const TypeInfo vt82c686b_superio_info = {
     .name          = TYPE_VT82C686B_SUPERIO,
-    .parent        = TYPE_VIA_SUPERIO,
+    .parent        = TYPE_NS87560_SUPERIO,
     .instance_size = sizeof(ViaSuperIOState),
     .instance_init = vt82c686b_superio_init,
     .class_size    = sizeof(ISASuperIOClass),
@@ -490,8 +490,8 @@ static const TypeInfo vt82c686b_superio_info = {
 
 
 
-#define TYPE_VIA_ISA "via-isa"
-OBJECT_DECLARE_SIMPLE_TYPE(ViaISAState, VIA_ISA)
+#define TYPE_NS87560_ISA "NS87560-isa"
+OBJECT_DECLARE_SIMPLE_TYPE(ViaISAState, NS87560_ISA)
 
 struct ViaISAState {
     PCIDevice dev;
@@ -504,12 +504,10 @@ struct ViaISAState {
     PCIIDEState ide;
     UHCIState uhci[2];
     ViaPMState pm;
-    ViaAC97State ac97;
-    PCIDevice mc97;
 };
 
 static const VMStateDescription vmstate_via = {
-    .name = "via-isa",
+    .name = "ns87560-isa",
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
@@ -520,17 +518,15 @@ static const VMStateDescription vmstate_via = {
 
 static void via_isa_init(Object *obj)
 {
-    ViaISAState *s = VIA_ISA(obj);
+    ViaISAState *s = NS87560_ISA(obj);
 
-    object_initialize_child(obj, "ide", &s->ide, TYPE_VIA_IDE);
+    // object_initialize_child(obj, "ide", &s->ide, TYPE_VIA_IDE);
     object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_VT82C686B_USB_UHCI);
     object_initialize_child(obj, "uhci2", &s->uhci[1], TYPE_VT82C686B_USB_UHCI);
-    object_initialize_child(obj, "ac97", &s->ac97, TYPE_VIA_AC97);
-    object_initialize_child(obj, "mc97", &s->mc97, TYPE_VIA_MC97);
 }
 
 static const TypeInfo via_isa_info = {
-    .name          = TYPE_VIA_ISA,
+    .name          = TYPE_NS87560_ISA,
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(ViaISAState),
     .instance_init = via_isa_init,
@@ -558,7 +554,7 @@ static int via_isa_get_pci_irq(const ViaISAState *s, int pin)
 
 void via_isa_set_irq(PCIDevice *d, int pin, int level)
 {
-    ViaISAState *s = VIA_ISA(pci_get_function_0(d));
+    ViaISAState *s = NS87560_ISA(pci_get_function_0(d));
     uint8_t irq = d->config[PCI_INTERRUPT_LINE], max_irq = 15;
     int f = PCI_FUNC(d->devfn);
     uint16_t mask;
@@ -615,7 +611,7 @@ static void via_isa_request_i8259_irq(void *opaque, int irq, int level)
 
 static void via_isa_realize(PCIDevice *d, Error **errp)
 {
-    ViaISAState *s = VIA_ISA(d);
+    ViaISAState *s = NS87560_ISA(d);
     DeviceState *dev = DEVICE(d);
     PCIBus *pci_bus = pci_get_bus(d);
     ISABus *isa_bus;
@@ -670,18 +666,6 @@ static void via_isa_realize(PCIDevice *d, Error **errp)
     if (!qdev_realize(DEVICE(&s->pm), BUS(pci_bus), errp)) {
         return;
     }
-
-    /* Function 5: AC97 Audio */
-    qdev_prop_set_int32(DEVICE(&s->ac97), "addr", d->devfn + 5);
-    if (!qdev_realize(DEVICE(&s->ac97), BUS(pci_bus), errp)) {
-        return;
-    }
-
-    /* Function 6: MC97 Modem */
-    qdev_prop_set_int32(DEVICE(&s->mc97), "addr", d->devfn + 6);
-    if (!qdev_realize(DEVICE(&s->mc97), BUS(pci_bus), errp)) {
-        return;
-    }
 }
 
 /* TYPE_VT82C686B_ISA */
@@ -689,7 +673,7 @@ static void via_isa_realize(PCIDevice *d, Error **errp)
 static void vt82c686b_write_config(PCIDevice *d, uint32_t addr,
                                    uint32_t val, int len)
 {
-    ViaISAState *s = VIA_ISA(d);
+    ViaISAState *s = NS87560_ISA(d);
 
     // trace_via_isa_write(addr, val, len);
     pci_default_write_config(d, addr, val, len);
@@ -701,7 +685,7 @@ static void vt82c686b_write_config(PCIDevice *d, uint32_t addr,
 
 static void vt82c686b_isa_reset(DeviceState *dev)
 {
-    ViaISAState *s = VIA_ISA(dev);
+    ViaISAState *s = NS87560_ISA(dev);
     uint8_t *pci_conf = s->dev.config;
 
     pci_set_long(pci_conf + PCI_CAPABILITY_LIST, 0x000000c0);
@@ -721,7 +705,7 @@ static void vt82c686b_isa_reset(DeviceState *dev)
 
 static void vt82c686b_init(Object *obj)
 {
-    ViaISAState *s = VIA_ISA(obj);
+    ViaISAState *s = NS87560_ISA(obj);
 
     object_initialize_child(obj, "sio", &s->via_sio, TYPE_VT82C686B_SUPERIO);
     object_initialize_child(obj, "pm", &s->pm, TYPE_VT82C686B_PM);
@@ -734,20 +718,19 @@ static void vt82c686b_class_init(ObjectClass *klass, void *data)
 
     k->realize = via_isa_realize;
     k->config_write = vt82c686b_write_config;
-    k->vendor_id = PCI_VENDOR_ID_VIA;
+    k->vendor_id = PCI_VENDOR_ID_NS;
     k->device_id = PCI_DEVICE_ID_VIA_82C686B_ISA;
     k->class_id = PCI_CLASS_BRIDGE_ISA;
     k->revision = 0x40;
     device_class_set_legacy_reset(dc, vt82c686b_isa_reset);
     dc->desc = "ISA bridge";
     dc->vmsd = &vmstate_via;
-    /* Reason: part of VIA VT82C686 southbridge, needs to be wired up */
     dc->user_creatable = false;
 }
 
 static const TypeInfo vt82c686b_isa_info = {
     .name          = TYPE_VT82C686B_ISA,
-    .parent        = TYPE_VIA_ISA,
+    .parent        = TYPE_NS87560_ISA,
     .instance_size = sizeof(ViaISAState),
     .instance_init = vt82c686b_init,
     .class_init    = vt82c686b_class_init,
