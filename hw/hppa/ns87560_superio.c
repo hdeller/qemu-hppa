@@ -53,6 +53,9 @@
 #define PCI_DEVICE_ID_NS_87560_LIO      0x000e
 #define PCI_DEVICE_ID_NS_87560_USB      0x0012
 
+#define TYPE_NS87560b_ISA "ns87560b-isa"
+#define TYPE_NS87560b_USB_UHCI "ns87560b-usb-uhci"
+
 void create_NS_87560_superio(PCIBus *pci_bus, int major);
 void ns87560_isa_set_irq(PCIDevice *d, int pin, int level);
 
@@ -263,7 +266,7 @@ static void via_pm_class_init(ObjectClass *klass, void *data)
     dc->vmsd = &vmstate_acpi;
 }
 
-static const TypeInfo via_pm_info = {
+static const TypeInfo ns_pm_info = {
     .name          = TYPE_VIA_PM,
     .parent        = TYPE_PCI_DEVICE,
     .instance_size = sizeof(ViaPMState),
@@ -278,10 +281,10 @@ static const ViaPMInitInfo ns87560b_pm_init_info = {
     .device_id = PCI_DEVICE_ID_VIA_82C686B_PM,
 };
 
-#define TYPE_VT82C686B_PM "ns87560b-pm"
+#define TYPE_NS87560b_PM "ns87560b-pm"
 
 static const TypeInfo ns87560b_pm_info = {
-    .name          = TYPE_VT82C686B_PM,
+    .name          = TYPE_NS87560b_PM,
     .parent        = TYPE_VIA_PM,
     .class_init    = via_pm_class_init,
     .class_data    = (void *)&ns87560b_pm_init_info,
@@ -297,12 +300,12 @@ struct ViaSuperIOState {
     MemoryRegion io;
 };
 
-static inline void via_superio_io_enable(ViaSuperIOState *s, bool enable)
+static inline void ns_superio_io_enable(ViaSuperIOState *s, bool enable)
 {
     memory_region_set_enabled(&s->io, enable);
 }
 
-static void via_superio_realize(DeviceState *d, Error **errp)
+static void ns_superio_realize(DeviceState *d, Error **errp)
 {
     ViaSuperIOState *s = NS87560_SUPERIO(d);
     ISASuperIOClass *ic = ISA_SUPERIO_GET_CLASS(s);
@@ -321,7 +324,7 @@ static void via_superio_realize(DeviceState *d, Error **errp)
                                 &s->io);
 }
 
-static uint64_t via_superio_cfg_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t ns_superio_cfg_read(void *opaque, hwaddr addr, unsigned size)
 {
     ViaSuperIOState *sc = opaque;
     uint8_t idx = sc->regs[0];
@@ -333,11 +336,11 @@ static uint64_t via_superio_cfg_read(void *opaque, hwaddr addr, unsigned size)
     if (addr == 1 && idx == 0) {
         val = 0; /* reading reg 0 where we store index value */
     }
-    // trace_via_superio_read(idx, val);
+    // trace_ns_superio_read(idx, val);
     return val;
 }
 
-static void via_superio_devices_enable(ViaSuperIOState *s, uint8_t data)
+static void ns_superio_devices_enable(ViaSuperIOState *s, uint8_t data)
 {
     ISASuperIOClass *ic = ISA_SUPERIO_GET_CLASS(s);
 
@@ -348,25 +351,25 @@ static void via_superio_devices_enable(ViaSuperIOState *s, uint8_t data)
     isa_fdc_set_enabled(s->superio.floppy, data & BIT(4));
 }
 
-static void via_superio_class_init(ObjectClass *klass, void *data)
+static void ns_superio_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     ISASuperIOClass *sc = ISA_SUPERIO_CLASS(klass);
 
-    device_class_set_parent_realize(dc, via_superio_realize,
+    device_class_set_parent_realize(dc, ns_superio_realize,
                                     &sc->parent_realize);
 }
 
-static const TypeInfo via_superio_info = {
+static const TypeInfo ns_superio_info = {
     .name          = TYPE_NS87560_SUPERIO,
     .parent        = TYPE_ISA_SUPERIO,
     .instance_size = sizeof(ViaSuperIOState),
     .class_size    = sizeof(ISASuperIOClass),
-    .class_init    = via_superio_class_init,
+    .class_init    = ns_superio_class_init,
     .abstract      = true,
 };
 
-#define TYPE_VT82C686B_SUPERIO "ns87560b-superio"
+#define TYPE_NS87560b_SUPERIO "ns87560b-superio"
 
 static void ns87560b_superio_cfg_write(void *opaque, hwaddr addr,
                                         uint64_t data, unsigned size)
@@ -380,7 +383,7 @@ static void ns87560b_superio_cfg_write(void *opaque, hwaddr addr,
     }
 
     /* config data register */
-    // trace_via_superio_write(idx, data);
+    // trace_ns_superio_write(idx, data);
     switch (idx) {
     case 0x00 ... 0xdf:
     case 0xe4:
@@ -395,7 +398,7 @@ static void ns87560b_superio_cfg_write(void *opaque, hwaddr addr,
         return;
     case 0xe2:
         data &= 0x1f;
-        via_superio_devices_enable(sc, data);
+        ns_superio_devices_enable(sc, data);
         break;
     case 0xe3:
         data &= 0xfc;
@@ -414,14 +417,14 @@ static void ns87560b_superio_cfg_write(void *opaque, hwaddr addr,
         break;
     default:
         qemu_log_mask(LOG_UNIMP,
-                      "via_superio_cfg: unimplemented register 0x%x\n", idx);
+                      "ns_superio_cfg: unimplemented register 0x%x\n", idx);
         break;
     }
     sc->regs[idx] = data;
 }
 
 static const MemoryRegionOps ns87560b_superio_cfg_ops = {
-    .read = via_superio_cfg_read,
+    .read = ns_superio_cfg_read,
     .write = ns87560b_superio_cfg_write,
     .endianness = DEVICE_NATIVE_ENDIAN,
     .impl = {
@@ -480,7 +483,7 @@ static void ns87560b_superio_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo ns87560b_superio_info = {
-    .name          = TYPE_VT82C686B_SUPERIO,
+    .name          = TYPE_NS87560b_SUPERIO,
     .parent        = TYPE_NS87560_SUPERIO,
     .instance_size = sizeof(ViaSuperIOState),
     .instance_init = ns87560b_superio_init,
@@ -492,9 +495,9 @@ static const TypeInfo ns87560b_superio_info = {
 
 
 #define TYPE_NS87560_ISA "NS87560-isa"
-OBJECT_DECLARE_SIMPLE_TYPE(ViaISAState, NS87560_ISA)
+OBJECT_DECLARE_SIMPLE_TYPE(NS_ISAState, NS87560_ISA)
 
-struct ViaISAState {
+struct NS_ISAState {
     PCIDevice dev;
 
     IRQState i8259_irq;
@@ -512,24 +515,24 @@ static const VMStateDescription vmstate_via = {
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_PCI_DEVICE(dev, ViaISAState),
+        VMSTATE_PCI_DEVICE(dev, NS_ISAState),
         VMSTATE_END_OF_LIST()
     }
 };
 
 static void ns87560_isa_init(Object *obj)
 {
-    ViaISAState *s = NS87560_ISA(obj);
+    NS_ISAState *s = NS87560_ISA(obj);
 
-    // object_initialize_child(obj, "ide", &s->ide, TYPE_VIA_IDE);
-    object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_VT82C686B_USB_UHCI);
-    object_initialize_child(obj, "uhci2", &s->uhci[1], TYPE_VT82C686B_USB_UHCI);
+    object_initialize_child(obj, "ide", &s->ide, "cmd646-ide");
+    object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_NS87560b_USB_UHCI);
+    object_initialize_child(obj, "uhci2", &s->uhci[1], TYPE_NS87560b_USB_UHCI);
 }
 
 static const TypeInfo ns87560_isa_info = {
     .name          = TYPE_NS87560_ISA,
     .parent        = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(ViaISAState),
+    .instance_size = sizeof(NS_ISAState),
     .instance_init = ns87560_isa_init,
     .abstract      = true,
     .interfaces    = (InterfaceInfo[]) {
@@ -538,7 +541,7 @@ static const TypeInfo ns87560_isa_info = {
     },
 };
 
-static int ns87560_isa_get_pci_irq(const ViaISAState *s, int pin)
+static int ns87560_isa_get_pci_irq(const NS_ISAState *s, int pin)
 {
     switch (pin) {
     case 0:
@@ -555,7 +558,7 @@ static int ns87560_isa_get_pci_irq(const ViaISAState *s, int pin)
 
 void ns87560_isa_set_irq(PCIDevice *d, int pin, int level)
 {
-    ViaISAState *s = NS87560_ISA(pci_get_function_0(d));
+    NS_ISAState *s = NS87560_ISA(pci_get_function_0(d));
     uint8_t irq = d->config[PCI_INTERRUPT_LINE], max_irq = 15;
     int f = PCI_FUNC(d->devfn);
     uint16_t mask;
@@ -606,13 +609,13 @@ static void ns87560_isa_pirq(void *opaque, int pin, int level)
 
 static void ns87560_isa_request_i8259_irq(void *opaque, int irq, int level)
 {
-    ViaISAState *s = opaque;
+    NS_ISAState *s = opaque;
     qemu_set_irq(s->cpu_intr, level);
 }
 
 static void ns87560_isa_realize(PCIDevice *d, Error **errp)
 {
-    ViaISAState *s = NS87560_ISA(d);
+    NS_ISAState *s = NS87560_ISA(d);
     DeviceState *dev = DEVICE(d);
     PCIBus *pci_bus = pci_get_bus(d);
     ISABus *isa_bus;
@@ -669,24 +672,24 @@ static void ns87560_isa_realize(PCIDevice *d, Error **errp)
     }
 }
 
-/* TYPE_VT82C686B_ISA */
+/* TYPE_NS87560b_ISA */
 
 static void ns87560b_write_config(PCIDevice *d, uint32_t addr,
                                    uint32_t val, int len)
 {
-    ViaISAState *s = NS87560_ISA(d);
+    NS_ISAState *s = NS87560_ISA(d);
 
     // trace_ns87560_isa_write(addr, val, len);
     pci_default_write_config(d, addr, val, len);
     if (addr == 0x85) {
         /* BIT(1): enable or disable superio config io ports */
-        via_superio_io_enable(&s->via_sio, val & BIT(1));
+        ns_superio_io_enable(&s->via_sio, val & BIT(1));
     }
 }
 
 static void ns87560b_isa_reset(DeviceState *dev)
 {
-    ViaISAState *s = NS87560_ISA(dev);
+    NS_ISAState *s = NS87560_ISA(dev);
     uint8_t *pci_conf = s->dev.config;
 
     pci_set_long(pci_conf + PCI_CAPABILITY_LIST, 0x000000c0);
@@ -694,6 +697,7 @@ static void ns87560b_isa_reset(DeviceState *dev)
                  PCI_COMMAND_MASTER | PCI_COMMAND_SPECIAL);
     pci_set_word(pci_conf + PCI_STATUS, PCI_STATUS_DEVSEL_MEDIUM);
 
+#if 0
     pci_conf[0x48] = 0x01; /* Miscellaneous Control 3 */
     pci_conf[0x4a] = 0x04; /* IDE interrupt Routing */
     pci_conf[0x4f] = 0x03; /* DMA/Master Mem Access Control 3 */
@@ -702,14 +706,15 @@ static void ns87560b_isa_reset(DeviceState *dev)
     pci_conf[0x5a] = 0x04; /* KBC/RTC Control*/
     pci_conf[0x5f] = 0x04;
     pci_conf[0x77] = 0x10; /* GPIO Control 1/2/3/4 */
+#endif
 }
 
 static void ns87560b_init(Object *obj)
 {
-    ViaISAState *s = NS87560_ISA(obj);
+    NS_ISAState *s = NS87560_ISA(obj);
 
-    object_initialize_child(obj, "sio", &s->via_sio, TYPE_VT82C686B_SUPERIO);
-    object_initialize_child(obj, "pm", &s->pm, TYPE_VT82C686B_PM);
+    object_initialize_child(obj, "sio", &s->via_sio, TYPE_NS87560b_SUPERIO);
+    // object_initialize_child(obj, "pm", &s->pm, TYPE_NS87560b_PM);
 }
 
 static void ns87560b_class_init(ObjectClass *klass, void *data)
@@ -730,9 +735,9 @@ static void ns87560b_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo ns87560b_isa_info = {
-    .name          = TYPE_VT82C686B_ISA,
+    .name          = TYPE_NS87560b_ISA,
     .parent        = TYPE_NS87560_ISA,
-    .instance_size = sizeof(ViaISAState),
+    .instance_size = sizeof(NS_ISAState),
     .instance_init = ns87560b_init,
     .class_init    = ns87560b_class_init,
 };
@@ -740,9 +745,9 @@ static const TypeInfo ns87560b_isa_info = {
 
 static void ns87560b_register_types(void)
 {
-    type_register_static(&via_pm_info);
+    type_register_static(&ns_pm_info);
     type_register_static(&ns87560b_pm_info);
-    type_register_static(&via_superio_info);
+    type_register_static(&ns_superio_info);
     type_register_static(&ns87560b_superio_info);
     type_register_static(&ns87560_isa_info);
     type_register_static(&ns87560b_isa_info);
