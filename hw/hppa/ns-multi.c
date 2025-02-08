@@ -48,6 +48,22 @@
 #include "hw/ide/ide-internal.h"
 // #include "trace.h"
 
+#define TYPE_NS87560_ALL "SUPERIO_ALL"
+OBJECT_DECLARE_SIMPLE_TYPE(SUPERIO_ALL_State, NS87560_ALL)
+
+struct SUPERIO_ALL_State {
+    PCIIDEState ide;
+
+    IRQState i8259_irq;
+    qemu_irq cpu_intr;
+    qemu_irq *isa_irqs_in;
+    uint16_t irq_state[ISA_NUM_IRQS];
+    //ViaSuperIOState via_sio;
+    // UHCIState uhci[2];
+    // ViaPMState pm;
+};
+
+
 /* CMD646 specific */
 #define CFR                  0x50
 #define   CFR_INTR_CH0       0x04
@@ -325,6 +341,20 @@ static void pci_cmd646_ide_exitfn(PCIDevice *dev)
     }
 }
 
+static void superio_all_init(Object *obj)
+{   
+    PCIIDEState *d = PCI_IDE(obj);
+
+    qdev_init_gpio_out_named(DEVICE(d), d->isa_irq, "isa-irq",
+                             ARRAY_SIZE(d->isa_irq));
+
+    // NS_ISAState *s = NS87560_ISA(obj);
+
+    // object_initialize_child(obj, "ide", &s->ide, "cmd646-ide");
+    // object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_NS87560b_USB_UHCI);
+    // object_initialize_child(obj, "uhci2", &s->uhci[1], TYPE_NS87560b_USB_UHCI);
+}
+
 static const Property cmd646_ide_properties[] = {
     DEFINE_PROP_UINT32("secondary", PCIIDEState, secondary, 1),
 };
@@ -349,8 +379,10 @@ static void cmd646_ide_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo cmd646_ide_info = {
-    .name          = "superio-all",
+    .name          = TYPE_NS87560_ALL,
     .parent        = TYPE_PCI_IDE,
+    .instance_size = sizeof(SUPERIO_ALL_State),
+    .instance_init = superio_all_init,
     .class_init    = cmd646_ide_class_init,
 };
 
@@ -519,7 +551,7 @@ void create_PCI_87560_superio(PCIBus *pci_bus, int major)
 {
     PCIDevice *pci_dev;
 
-    pci_dev = pci_new_multifunction(PCI_DEVFN(major, 0), "superio-all");
+    pci_dev = pci_new_multifunction(PCI_DEVFN(major, 0), TYPE_NS87560_ALL);
     pci_realize_and_unref(pci_dev, pci_bus, &error_fatal);
 
     /* function 0 is a PCI IDE Controller */
