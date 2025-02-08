@@ -437,6 +437,7 @@ static void ns87560b_superio_reset(DeviceState *dev)
     ViaSuperIOState *s = NS87560_SUPERIO(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
+#if 0
     /* Device ID */
     ns87560b_superio_cfg_write(s, 0, 0xe0, 1);
     ns87560b_superio_cfg_write(s, 1, 0x3c, 1);
@@ -462,6 +463,7 @@ static void ns87560b_superio_reset(DeviceState *dev)
     ns87560b_superio_cfg_write(s, 1, 0xbe, 1);
 
     ns87560b_superio_cfg_write(s, 0, 0, 1);
+#endif
 }
 
 static void ns87560b_superio_init(Object *obj)
@@ -521,7 +523,7 @@ static const VMStateDescription vmstate_via = {
 
 static void ns87560_isa_init(Object *obj)
 {
-    NS_ISAState *s = NS87560_ISA(obj);
+    // NS_ISAState *s = NS87560_ISA(obj);
 
     // object_initialize_child(obj, "ide", &s->ide, "cmd646-ide");
     // object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_NS87560b_USB_UHCI);
