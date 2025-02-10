@@ -170,14 +170,14 @@ static void via_isa_realize(PCIDevice *d, Error **errp)
 {
     ViaISAState *s = NS87_ISA(d);
     DeviceState *dev = DEVICE(d);
-    PCIBus *pci_bus = pci_get_bus(d);
-    ISABus *isa_bus;
+//    PCIBus *pci_bus = pci_get_bus(d);
+//    ISABus *isa_bus;
 
-    int i;
     qdev_init_gpio_out_named(dev, &s->cpu_intr, "intr", 1);
     qdev_init_gpio_in_named(dev, via_isa_pirq, "pirq", PCI_NUM_PINS);
     qemu_init_irq(&s->i8259_irq, via_isa_request_i8259_irq, s, 0);
 #if 0
+    int i;
     isa_bus = isa_bus_new(dev, pci_address_space(d), pci_address_space_io(d),
                           errp);
 
