@@ -639,7 +639,8 @@ static void machine_HP_C3700_init(MachineState *machine)
     /* Add SCSI discs, NICs, graphics & load firmware */
     machine_HP_common_init_tail(machine, pci_bus, translate);
 
-    create_PCI_87560_superio(pci_bus, 6);
+    // create_PCI_87560_superio(pci_bus, 6);
+    create_NS_87560_superio(pci_bus, 6);
 }
 
 static void hppa_machine_reset(MachineState *ms, ResetType type)

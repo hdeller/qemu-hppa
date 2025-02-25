@@ -308,6 +308,7 @@ static const TypeInfo vt82c686b_isa_info = {
 
 static void vt82c686b_register_types(void)
 {
+return;
     type_register_static(&via_isa_info);
     type_register_static(&vt82c686b_isa_info);
 }

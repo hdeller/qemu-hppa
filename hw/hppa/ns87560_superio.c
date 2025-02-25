@@ -289,8 +289,10 @@ static const TypeInfo ns87560b_pm_info = {
     .class_data    = (void *)&ns87560b_pm_init_info,
 };
 
-#define TYPE_NS87560_SUPERIO "NS87560-superio"
-OBJECT_DECLARE_SIMPLE_TYPE(ViaSuperIOState, NS87560_SUPERIO)
+
+/* MAIN ****/
+#define TYPE_NS_ISA_SUPERIO "NS_ISA-superio"
+OBJECT_DECLARE_SIMPLE_TYPE(ViaSuperIOState, NS_ISA_SUPERIO)
 
 struct ViaSuperIOState {
     ISASuperIODevice superio;
@@ -306,7 +308,7 @@ static inline void ns_superio_io_enable(ViaSuperIOState *s, bool enable)
 
 static void ns_superio_realize(DeviceState *d, Error **errp)
 {
-    ViaSuperIOState *s = NS87560_SUPERIO(d);
+    ViaSuperIOState *s = NS_ISA_SUPERIO(d);
     ISASuperIOClass *ic = ISA_SUPERIO_GET_CLASS(s);
     Error *local_err = NULL;
 
@@ -316,7 +318,7 @@ static void ns_superio_realize(DeviceState *d, Error **errp)
         error_propagate(errp, local_err);
         return;
     }
-    memory_region_init_io(&s->io, OBJECT(d), s->io_ops, s, "via-superio", 2);
+    memory_region_init_io(&s->io, OBJECT(d), s->io_ops, s, "ns-isa-superio", 2);
     memory_region_set_enabled(&s->io, false);
     /* The floppy also uses 0x3f0 and 0x3f1 but this seems to work anyway */
     memory_region_add_subregion(isa_address_space_io(ISA_DEVICE(s)), 0x3f0,
@@ -341,6 +343,7 @@ static uint64_t ns_superio_cfg_read(void *opaque, hwaddr addr, unsigned size)
 
 static void ns_superio_devices_enable(ViaSuperIOState *s, uint8_t data)
 {
+#if 0
     ISASuperIOClass *ic = ISA_SUPERIO_GET_CLASS(s);
 
     isa_parallel_set_enabled(s->superio.parallel[0], (data & 0x3) != 3);
@@ -348,6 +351,7 @@ static void ns_superio_devices_enable(ViaSuperIOState *s, uint8_t data)
         isa_serial_set_enabled(s->superio.serial[i], data & BIT(i + 2));
     }
     isa_fdc_set_enabled(s->superio.floppy, data & BIT(4));
+#endif
 }
 
 static void ns_superio_class_init(ObjectClass *klass, void *data)
@@ -360,7 +364,7 @@ static void ns_superio_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo ns_superio_info = {
-    .name          = TYPE_NS87560_SUPERIO,
+    .name          = TYPE_NS_ISA_SUPERIO,
     .parent        = TYPE_ISA_SUPERIO,
     .instance_size = sizeof(ViaSuperIOState),
     .class_size    = sizeof(ISASuperIOClass),
@@ -434,7 +438,7 @@ static const MemoryRegionOps ns87560b_superio_cfg_ops = {
 
 static void ns87560b_superio_reset(DeviceState *dev)
 {
-    ViaSuperIOState *s = NS87560_SUPERIO(dev);
+    ViaSuperIOState *s = NS_ISA_SUPERIO(dev);
 
     memset(s->regs, 0, sizeof(s->regs));
 #if 0
@@ -468,7 +472,7 @@ static void ns87560b_superio_reset(DeviceState *dev)
 
 static void ns87560b_superio_init(Object *obj)
 {
-    NS87560_SUPERIO(obj)->io_ops = &ns87560b_superio_cfg_ops;
+    NS_ISA_SUPERIO(obj)->io_ops = &ns87560b_superio_cfg_ops;
 }
 
 static void ns87560b_superio_class_init(ObjectClass *klass, void *data)
@@ -485,7 +489,7 @@ static void ns87560b_superio_class_init(ObjectClass *klass, void *data)
 
 static const TypeInfo ns87560b_superio_info = {
     .name          = TYPE_NS87560b_SUPERIO,
-    .parent        = TYPE_NS87560_SUPERIO,
+    .parent        = TYPE_NS_ISA_SUPERIO,
     .instance_size = sizeof(ViaSuperIOState),
     .instance_init = ns87560b_superio_init,
     .class_size    = sizeof(ISASuperIOClass),
@@ -496,9 +500,9 @@ static const TypeInfo ns87560b_superio_info = {
 
 
 #define TYPE_NS87560_ISA "NS87560-isa"
-OBJECT_DECLARE_SIMPLE_TYPE(NS_ISAState, NS87560_ISA)
+OBJECT_DECLARE_SIMPLE_TYPE(SuperIOState, NS87560_ISA)
 
-struct NS_ISAState {
+struct SuperIOState {
     PCIDevice dev;
 
     IRQState i8259_irq;
@@ -516,14 +520,14 @@ static const VMStateDescription vmstate_via = {
     .version_id = 1,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_PCI_DEVICE(dev, NS_ISAState),
+        VMSTATE_PCI_DEVICE(dev, SuperIOState),
         VMSTATE_END_OF_LIST()
     }
 };
 
 static void ns87560_isa_init(Object *obj)
 {
-    // NS_ISAState *s = NS87560_ISA(obj);
+    // SuperIOState *s = NS87560_ISA(obj);
 
     // object_initialize_child(obj, "ide", &s->ide, "cmd646-ide");
     // object_initialize_child(obj, "uhci1", &s->uhci[0], TYPE_NS87560b_USB_UHCI);
@@ -531,18 +535,18 @@ static void ns87560_isa_init(Object *obj)
 }
 
 static const TypeInfo ns87560_isa_info = {
-    .name          = TYPE_NS87560_ISA,
+    .name          = TYPE_NS87560_ISA,          // DIESEN HIER !!!
     .parent        = TYPE_PCI_DEVICE,
-    .instance_size = sizeof(NS_ISAState),
+    .instance_size = sizeof(SuperIOState),
     .instance_init = ns87560_isa_init,
-    // .abstract      = true,
+    .abstract      = true,
     .interfaces    = (InterfaceInfo[]) {
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { },
     },
 };
 
-static int ns87560_isa_get_pci_irq(const NS_ISAState *s, int pin)
+static int ns87560_isa_get_pci_irq(const SuperIOState *s, int pin)
 {
     switch (pin) {
     case 0:
@@ -559,7 +563,7 @@ static int ns87560_isa_get_pci_irq(const NS_ISAState *s, int pin)
 
 void ns87560_isa_set_irq(PCIDevice *d, int pin, int level)
 {
-    NS_ISAState *s = NS87560_ISA(pci_get_function_0(d));
+    SuperIOState *s = NS87560_ISA(pci_get_function_0(d));
     uint8_t irq = d->config[PCI_INTERRUPT_LINE], max_irq = 15;
     int f = PCI_FUNC(d->devfn);
     uint16_t mask;
@@ -603,6 +607,7 @@ void ns87560_isa_set_irq(PCIDevice *d, int pin, int level)
     qemu_set_irq(s->isa_irqs_in[irq], !!s->irq_state[irq]);
 }
 
+#if 0
 static void ns87560_isa_pirq(void *opaque, int pin, int level)
 {
     ns87560_isa_set_irq(opaque, pin, level);
@@ -610,13 +615,15 @@ static void ns87560_isa_pirq(void *opaque, int pin, int level)
 
 static void ns87560_isa_request_i8259_irq(void *opaque, int irq, int level)
 {
-    NS_ISAState *s = opaque;
+    SuperIOState *s = opaque;
     qemu_set_irq(s->cpu_intr, level);
 }
+#endif
 
 static void ns87560_isa_realize(PCIDevice *d, Error **errp)
 {
-    NS_ISAState *s = NS87560_ISA(d);
+#if 0
+    SuperIOState *s = NS87560_ISA(d);
     DeviceState *dev = DEVICE(d);
     PCIBus *pci_bus = pci_get_bus(d);
     ISABus *isa_bus;
@@ -671,6 +678,7 @@ static void ns87560_isa_realize(PCIDevice *d, Error **errp)
     if (!qdev_realize(DEVICE(&s->pm), BUS(pci_bus), errp)) {
         return;
     }
+#endif
 }
 
 /* TYPE_NS87560b_ISA */
@@ -678,7 +686,9 @@ static void ns87560_isa_realize(PCIDevice *d, Error **errp)
 static void ns87560b_write_config(PCIDevice *d, uint32_t addr,
                                    uint32_t val, int len)
 {
-    NS_ISAState *s = NS87560_ISA(d);
+    SuperIOState *s = NS87560_ISA(d);
+
+    return;
 
     // trace_ns87560_isa_write(addr, val, len);
     pci_default_write_config(d, addr, val, len);
@@ -690,7 +700,7 @@ static void ns87560b_write_config(PCIDevice *d, uint32_t addr,
 
 static void ns87560b_isa_reset(DeviceState *dev)
 {
-    NS_ISAState *s = NS87560_ISA(dev);
+    SuperIOState *s = NS87560_ISA(dev);
     uint8_t *pci_conf = s->dev.config;
 
     pci_set_long(pci_conf + PCI_CAPABILITY_LIST, 0x000000c0);
@@ -712,9 +722,9 @@ static void ns87560b_isa_reset(DeviceState *dev)
 
 static void ns87560b_init(Object *obj)
 {
-    NS_ISAState *s = NS87560_ISA(obj);
+    // SuperIOState *s = NS87560_ISA(obj);
 
-    object_initialize_child(obj, "sio", &s->via_sio, TYPE_NS87560b_SUPERIO);
+    // object_initialize_child(obj, "sio", &s->via_sio, TYPE_NS87560b_SUPERIO);
     // object_initialize_child(obj, "pm", &s->pm, TYPE_NS87560b_PM);
 }
 
@@ -736,9 +746,9 @@ static void ns87560b_class_init(ObjectClass *klass, void *data)
 }
 
 static const TypeInfo ns87560b_isa_info = {
-    .name          = TYPE_NS87560b_ISA,
+    .name          = TYPE_NS87560b_ISA, // hier oben
     .parent        = TYPE_NS87560_ISA,
-    .instance_size = sizeof(NS_ISAState),
+    .instance_size = sizeof(SuperIOState),
     .instance_init = ns87560b_init,
     .class_init    = ns87560b_class_init,
 };
@@ -760,7 +770,7 @@ void create_NS_87560_superio(PCIBus *pci_bus, int major)
 {
     PCIDevice *pci_dev;
 
-    pci_dev = pci_new_multifunction(PCI_DEVFN(major, 0), TYPE_NS87560_ISA);
+    pci_dev = pci_new_multifunction(PCI_DEVFN(major, 0), TYPE_NS87560b_ISA);
     pci_realize_and_unref(pci_dev, pci_bus, &error_fatal);
 
     /* function 0 is a PCI IDE Controller */
