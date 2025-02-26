@@ -781,4 +781,32 @@ void create_NS_87560_superio(PCIBus *pci_bus, int major)
     /* function 1 is a SuperIO chip */
 
     /* function 2 is a USB chip */
+#if 0
+00:0e.0 0101: 100b:0002 (rev 03) (prog-if 8f [PCI native mode controller, supports both channels switched to ISA compatibility mode, supports bus mastering])
+        Control: I/O+ Mem- BusMaster+ SpecCycle- MemWINV+ VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx-
+        Status: Cap- 66MHz- UDF- FastB2B- ParErr- DEVSEL=medium >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+        Latency: 255, Cache Line Size: 64 bytes
+        Interrupt: pin ? routed to IRQ 7
+        Region 0: I/O ports at 0f00 [size=8]
+        Region 1: I/O ports at 0e00 [size=4]
+        Region 2: I/O ports at 0d00 [size=8]
+        Region 3: I/O ports at 0b00 [size=4]
+        Region 4: I/O ports at 0a00 [size=16]
+        Kernel driver in use: pata_ns87415
+        
+00:0e.1 0680: 100b:000e (rev 01)
+        Control: I/O+ Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx-
+        Status: Cap- 66MHz- UDF- FastB2B- ParErr- DEVSEL=medium >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+        Latency: 255, Cache Line Size: 64 bytes
+        Interrupt: pin ? routed to IRQ 68 
+        Kernel driver in use: SuperIO
+
+00:0e.2 0c03: 100b:0012 (rev 02) (prog-if 10 [OHCI])
+        Control: I/O+ Mem+ BusMaster+ SpecCycle- MemWINV+ VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx-
+        Status: Cap- 66MHz- UDF- FastB2B- ParErr- DEVSEL=medium >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+        Latency: 240
+        Interrupt: pin D routed to IRQ 1
+        Region 0: Memory at fffffffff4007000 (32-bit, non-prefetchable) [size=4K]
+        Region 1: Memory at fffffffff4006000 (32-bit, non-prefetchable) [size=4K]
+#endif
 }
