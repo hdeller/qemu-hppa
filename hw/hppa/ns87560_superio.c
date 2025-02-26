@@ -483,7 +483,7 @@ static void ns87560b_superio_class_init(ObjectClass *klass, void *data)
     device_class_set_legacy_reset(dc, ns87560b_superio_reset);
     sc->serial.count = 2;
     sc->parallel.count = 1;
-    sc->ide.count = 0; /* emulated by via-ide */
+    sc->ide.count = 0; /* emulated by pci-ide  via-ide */
     sc->floppy.count = 1;
 }
 
@@ -622,10 +622,10 @@ static void ns87560_isa_request_i8259_irq(void *opaque, int irq, int level)
 
 static void ns87560_isa_realize(PCIDevice *d, Error **errp)
 {
-#if 0
     SuperIOState *s = NS87560_ISA(d);
-    DeviceState *dev = DEVICE(d);
+    // DeviceState *dev = DEVICE(d);
     PCIBus *pci_bus = pci_get_bus(d);
+#if 0
     ISABus *isa_bus;
     int i;
 
@@ -649,20 +649,23 @@ static void ns87560_isa_realize(PCIDevice *d, Error **errp)
             d->wmask[i] = 0;
         }
     }
+#endif
 
-    /* Super I/O */
-    if (!qdev_realize(DEVICE(&s->via_sio), BUS(isa_bus), errp)) {
-        return;
-    }
-
-    /* Function 1: IDE */
-    qdev_prop_set_int32(DEVICE(&s->ide), "addr", d->devfn + 1);
+    /* Function 0: IDE */
+    qdev_prop_set_int32(DEVICE(&s->ide), "addr", d->devfn + 0);
     if (!qdev_realize(DEVICE(&s->ide), BUS(pci_bus), errp)) {
         return;
     }
+#if 0
     for (i = 0; i < 2; i++) {
         qdev_connect_gpio_out_named(DEVICE(&s->ide), "isa-irq", i,
                                     s->isa_irqs_in[14 + i]);
+    }
+
+    /* Function 1: Super I/O */
+    qdev_prop_set_int32(DEVICE(&s->via_sio), "addr", d->devfn + 1);
+    if (!qdev_realize(DEVICE(&s->via_sio), BUS(isa_bus), errp)) {
+        return;
     }
 
     /* Functions 2-3: USB Ports */
@@ -683,23 +686,9 @@ static void ns87560_isa_realize(PCIDevice *d, Error **errp)
 
 /* TYPE_NS87560b_ISA */
 
-static void ns87560b_write_config(PCIDevice *d, uint32_t addr,
-                                   uint32_t val, int len)
-{
-    SuperIOState *s = NS87560_ISA(d);
-
-    return;
-
-    // trace_ns87560_isa_write(addr, val, len);
-    pci_default_write_config(d, addr, val, len);
-    if (0 && addr == 0x85) {
-        /* BIT(1): enable or disable superio config io ports */
-        ns_superio_io_enable(&s->via_sio, val & BIT(1));
-    }
-}
-
 static void ns87560b_isa_reset(DeviceState *dev)
 {
+#if 0
     SuperIOState *s = NS87560_ISA(dev);
     uint8_t *pci_conf = s->dev.config;
 
@@ -708,7 +697,6 @@ static void ns87560b_isa_reset(DeviceState *dev)
                  PCI_COMMAND_MASTER | PCI_COMMAND_SPECIAL);
     pci_set_word(pci_conf + PCI_STATUS, PCI_STATUS_DEVSEL_MEDIUM);
 
-#if 0
     pci_conf[0x48] = 0x01; /* Miscellaneous Control 3 */
     pci_conf[0x4a] = 0x04; /* IDE interrupt Routing */
     pci_conf[0x4f] = 0x03; /* DMA/Master Mem Access Control 3 */
@@ -722,8 +710,9 @@ static void ns87560b_isa_reset(DeviceState *dev)
 
 static void ns87560b_init(Object *obj)
 {
-    // SuperIOState *s = NS87560_ISA(obj);
+    SuperIOState *s = NS87560_ISA(obj);
 
+    object_initialize_child(obj, "ide", &s->ide, TYPE_VIA_IDE);
     // object_initialize_child(obj, "sio", &s->via_sio, TYPE_NS87560b_SUPERIO);
     // object_initialize_child(obj, "pm", &s->pm, TYPE_NS87560b_PM);
 }
@@ -734,13 +723,12 @@ static void ns87560b_class_init(ObjectClass *klass, void *data)
     PCIDeviceClass *k = PCI_DEVICE_CLASS(klass);
 
     k->realize = ns87560_isa_realize;
-    k->config_write = ns87560b_write_config;
     k->vendor_id = PCI_VENDOR_ID_NS;
-    k->device_id = PCI_DEVICE_ID_NS_87560_LIO;
-    k->class_id = PCI_CLASS_BRIDGE_ISA;
+    k->device_id = PCI_DEVICE_ID_NS_87415;
+    k->class_id = PCI_CLASS_STORAGE_IDE;
     k->revision = 0x40;
     device_class_set_legacy_reset(dc, ns87560b_isa_reset);
-    dc->desc = "ISA bridge";
+    dc->desc = "SuperIO chip";
     dc->vmsd = &vmstate_via;
     dc->user_creatable = false;
 }
