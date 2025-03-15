@@ -71,6 +71,9 @@
 char *exec_path;
 char real_exec_path[PATH_MAX];
 
+
+static bool opt_binfmt_p;
+
 static bool opt_one_insn_per_tb;
 static const char *argv0;
 static const char *gdbstub;
@@ -184,6 +187,11 @@ __thread CPUState *thread_cpu;
 bool qemu_cpu_is_self(CPUState *cpu)
 {
     return thread_cpu == cpu;
+}
+
+static void handle_arg_binfmt_p(const char *arg)
+{
+    opt_binfmt_p = true;
 }
 
 void qemu_cpu_kick(CPUState *cpu)
@@ -521,6 +529,8 @@ static const struct qemu_argument arg_table[] = {
      "",           "log system calls"},
     {"seed",       "QEMU_RAND_SEED",   true,  handle_arg_seed,
      "",           "Seed for pseudo-random number generator"},
+    {"binfmt-p",   "QEMU_BINFMT_P",    false, handle_arg_binfmt_p,
+     "",           "indicate the binary is being executed via binfmt_misc with P flag"},
     {"trace",      "QEMU_TRACE",       true,  handle_arg_trace,
      "",           "[[enable=]<pattern>][,events=<file>][,file=<file>]"},
 #ifdef CONFIG_PLUGIN
@@ -612,11 +622,30 @@ static void usage(int exitcode)
     exit(exitcode);
 }
 
-static int parse_args(int argc, char **argv)
+static bool is_binfmt_p_interpreter(const char *path)
+{
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+    
+    return (strstr(basename, "-binfmt-P") != NULL);
+}
+
+static int parse_args(int argc, char **argv, bool *p_binfmt_p)
 {
     const char *r;
     int optind;
     const struct qemu_argument *arginfo;
+
+    if (argc >= 3 && is_binfmt_p_interpreter(argv[0])) {
+        /* Handle the case when kernel calls us with special arguments:
+           argv[0]: interpreter path
+           argv[1]: binary path
+           argv[2]: original argv[0] */
+        exec_path = argv[1];
+        handle_arg_argv0(argv[2]);
+        *p_binfmt_p = true;
+        return 3;  /* Skip the first 3 arguments */
+    }
 
     for (arginfo = arg_table; arginfo->handle_opt != NULL; arginfo++) {
         if (arginfo->env == NULL) {
@@ -738,7 +767,9 @@ int main(int argc, char **argv, char **envp)
     qemu_add_opts(&qemu_trace_opts);
     qemu_plugin_add_opts();
 
-    optind = parse_args(argc, argv);
+    bool binfmt_p_detected = false;
+    
+    optind = parse_args(argc, argv, &binfmt_p_detected);
 
     qemu_set_log_filename_flags(last_log_filename,
                                 last_log_mask | (enable_strace * LOG_STRACE),
@@ -762,6 +793,7 @@ int main(int argc, char **argv, char **envp)
     init_paths(interp_prefix);
 
     init_qemu_uname_release();
+    
 
     /*
      * Manage binfmt-misc open-binary flag
@@ -784,7 +816,11 @@ int main(int argc, char **argv, char **envp)
     /*
      * get binfmt_misc flags
      */
-    preserve_argv0 = !!(qemu_getauxval(AT_FLAGS) & AT_FLAGS_PRESERVE_ARGV0);
+    preserve_argv0 = !!(qemu_getauxval(AT_FLAGS) & AT_FLAGS_PRESERVE_ARGV0) ||
+                     opt_binfmt_p || binfmt_p_detected;
+
+    /* Debug statement to verify detection */
+    // fprintf(stderr, "QEMU binfmt-P detection: interpreter=%s, preserve_argv0=%d, is_binfmt_p=%d\n", argv[0], preserve_argv0, binfmt_p_detected);
 
     /*
      * Manage binfmt-misc preserve-arg[0] flag
