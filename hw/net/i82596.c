@@ -21,6 +21,7 @@
 #include "i82596.h"
 #include <zlib.h> /* for crc32 */
 
+#define ENABLE_DEBUG    1
 #if defined(ENABLE_DEBUG)
 #define DBG(x)          x
 #else

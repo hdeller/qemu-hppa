@@ -40,7 +40,7 @@
 #define HPA_POWER_BUTTON        (FIRMWARE_END - 0x10)
 static hwaddr soft_power_reg;
 
-#define enable_lasi_lan()       0
+#define enable_lasi_lan()       1
 
 static DeviceState *lasi_dev;
 
