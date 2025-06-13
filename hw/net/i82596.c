@@ -82,10 +82,10 @@ enum commands {
 #define I596_NO_SRC_ADD_IN  (s->config[3] & 0x08) /* if 1, do not insert MAC in Tx Packet */
 #define I596_LOOPBACK       (s->config[3] >> 6)     /* loopback mode, 3 = external loopback */
 #define I596_PROMISC        (s->config[8] & 0x01)
-#define I596_BC_DISABLE     (s->config[8] & 0x02)   /* broadcast disable */
+#define I596_BC_DISABLE     (s->config[8] & 0x02)   /* broadcast status */
 #define I596_NOCRC_INS      (s->config[8] & 0x08)   /* do not append CRC to Tx frame */
 #define I596_CRC16_32       (s->config[8] & 0x10)   /* CRC-16 or CRC-32 */
-#define I596_PADDING        (s->config[8] & 0x80)
+#define I596_PADDING        (s->config[8] & 0x80)   /* Should we add padding?*/
 #define I596_MIN_FRAME_LEN  (s->config[10]) /* minimum frame length */
 #define I596_CRCINM         (s->config[11] & 0x04)  /* Rx CRC appended in memory */
 #define I596_MC_ALL         (s->config[11] & 0x20)
@@ -269,8 +269,8 @@ static void i82596_configure(I82596State *s, uint32_t addr)
     s->config[2] &= 0x82; /* mask valid bits */
     s->config[2] |= 0x40;
     s->config[7]  &= 0xf7; /* clear zero bit */
-    assert(I596_NOCRC_INS == 0); /* do CRC insertion */
-    s->config[10] = MAX(s->config[10], 5); /* min frame length */
+    // assert(I596_NOCRC_INS == 0); /* do CRC insertion */
+    // s->config[10] = MAX(s->config[10], 5); /* min frame length */
     s->config[12] &= 0x40; /* only full duplex field valid */
     s->config[13] |= 0x3f; /* set ones in byte 13 */
 }
@@ -321,7 +321,7 @@ static void update_scb_status(I82596State *s)
     set_uint32(s->scb + 32, s->shrt_errs);
 }
 
-static void i82596_dump_statistics(I82596State *s, uint32_t addr)
+static void i82596_dump_premature(I82596State *s, uint32_t addr)
 {
     /* Write statistics to memory */
     set_uint32(addr, s->crc_errs);
@@ -391,7 +391,7 @@ static void command_loop(I82596State *s)
             set_multicast_list(s, s->cmd_p);
             break;
         case CmdDump:
-            i82596_dump_statistics(s, s->cmd_p + 8);
+            i82596_dump_premature(s, s->cmd_p + 8);
             /* set status */
             status = STAT_C | STAT_OK;
             set_uint16(s->cmd_p, status);
@@ -516,9 +516,9 @@ static void examine_scb(I82596State *s)
         s->rx_status = RX_IDLE;
         uint32_t rfd_p = get_uint32(s->scb + 8);
         if (rfd_p && rfd_p != I596_NULL) {
-            printf("[i82596] Found valid RFD at 0x%08x, receiver ready\n", rfd_p);
+            DBG(printf("[i82596] Found valid RFD at 0x%08x, receiver ready\n", rfd_p));
         } else {
-            printf("[i82596] No valid RFD found\n");
+            DBG(printf("[i82596] No valid RFD found\n"));
         }
     }
 
@@ -577,7 +577,7 @@ void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
         s->scp = val;
         break;
     case PORT_ALTDUMP:
-        i82596_dump_statistics(s, val);
+        i82596_dump_premature(s, val);
         break;
     case PORT_CA:
         signal_ca(s);
@@ -638,9 +638,9 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         }
     }
 
-    if (nc && nc->peer && !strcmp(nc->peer->name, "hub0port0") && sz > 350) {
-        sz = 346;  /* Forcing to expected size to prevent kernel panic */
-    }
+    // if (nc && nc->peer && !strcmp(nc->peer->name, "hub0port0") && sz > 350) {
+    //     sz = 346;  /* Forcing to expected size to prevent kernel panic */
+    // }
 
     if (sz > PKT_BUF_SZ) {
         sz = PKT_BUF_SZ;
@@ -654,18 +654,17 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 
     /* Check receiver state */
     if (s->rx_status == RX_SUSPENDED) {
-        trace_i82596_receive_analysis(">>> Receiving suspended");
+        trace_i82596_receive_analysis(">>> Receiving is suspended");
         return -1;
     }
 
     if (!s->lnkst) {
-        trace_i82596_receive_analysis(">>> Link down");
+        trace_i82596_receive_analysis(">>> Link is only down");
         return -1;
     }
 
-    /* Set receiver to READY state before processing packet */
     if (s->rx_status == RX_IDLE) {
-        s->rx_status = RX_READY;
+        s->rx_status = RX_READY;    /* Set receiver to READY state before processing packet */
     }
 
     /* Handle packet based on MAC address type */
@@ -712,16 +711,21 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     crc_ptr = (uint8_t *) &crc;
     cur_buf_ptr = buf;
 
+    uint16_t status = 0;
     /* Get current RFD from SCB */
     rfd_p = get_uint32(s->scb + 8);
     if (!rfd_p || rfd_p == I596_NULL) {
         s->rx_status = RX_NO_RESOURCES;
         s->scb_status |= SCB_STATUS_RNR;
+        s->rsc_errs++;
+        status |= 0x0001;
+        update_scb_status(s);
         return -1;
     }
 
+    /* SCB + 8 = CMD_BLOCK Accessed by RFD_P which has the command block*/
+
     uint16_t command = get_uint16(rfd_p + 2);
-    uint16_t status = 0;
     uint32_t next_rfd = get_uint32(rfd_p + 4);
 
     if ((command >> 3) & 1) {
@@ -734,6 +738,9 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         if (rbd == I596_NULL) {
             s->rx_status = RX_NO_RESO_RBD;  /* RX_NO_RESOURCES with flag */
             s->scb_status |= SCB_STATUS_RNR;
+            s->rsc_errs++;
+            status |= 0x0001;
+            update_scb_status(s);
             return -1;
         }
 
@@ -856,13 +863,13 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
                 status |= I596_EOF; /* No RBDs used, but EOF */
             }
 
-            s->rx_status = RX_NO_MORE_RBD;
-            s->scb_status |= SCB_STATUS_RNR;
-
-            uint32_t no_res_counter = s->scb + 36;
-            uint32_t count = get_uint32(no_res_counter);
-            count++;
-            set_uint32(no_res_counter, count);
+            if (len > (sz * 0.4)) {
+                s->rx_status = RX_NO_MORE_RBD;
+                s->scb_status |= SCB_STATUS_RNR;
+                s->ovrn_errs++;
+                status |= 0x0200;
+                update_scb_status(s);
+            }
         }
 
         /* Update next RFD with pointer to next free RBD */
@@ -878,6 +885,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         uint32_t data_addr = rfd_p + 16;
 
         if (sz < I596_MIN_FRAME_LEN) {
+            s->shrt_errs++;
             return -1;
         }
 
@@ -940,20 +948,12 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         }
     }
 
-    else if (s->rcvd_frames >= (s->rsc_errs > 0 ? 2 : 3)) {
-        generate_irq = true;
-        if (s->rsc_errs > 0) {
-            s->rsc_errs--;
-        }
-    }
-
-    else if (current_time - s->last_irq_time > (s->rsc_errs > 0 ? 250000 : 400000)) {
+    else if ((s->rcvd_frames >= (s->rsc_errs > 0 ? 2 : 3)) || \
+    (current_time - s->last_irq_time > (s->rsc_errs > 0 ? 250000 : 400000))) {
         generate_irq = true;
     }
-
     if (s->rx_status == RX_NO_MORE_RBD || s->rx_status == RX_NO_RESO_RBD) {
         generate_irq = true;
-        s->rsc_errs += 2;
     }
 
     if (generate_irq) {
