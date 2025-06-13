@@ -39,6 +39,17 @@ struct I82596State_st {
     uint8_t config[14]; /* config bytes from CONFIGURE command */
 
     uint8_t tx_buffer[0x4000];
+
+    /* Statistical Counters*/
+    uint32_t crc_errs;
+    uint32_t aln_errs;
+    uint32_t rsc_errs;
+    uint32_t ovrn_errs;
+    uint32_t rcvd_frames;
+    uint32_t shrt_errs;
+
+    uint64_t last_irq_time;
+
 };
 
 void i82596_h_reset(void *opaque);
