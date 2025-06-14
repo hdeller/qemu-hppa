@@ -6,6 +6,8 @@
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 
+#define PKT_BUF_SZ      1536
+
 #define PORT_RESET              0x00    /* reset 82596 */
 #define PORT_SELFTEST           0x01    /* selftest */
 #define PORT_ALTSCP             0x02    /* alternate SCB address */
@@ -38,18 +40,9 @@ struct I82596State_st {
     uint8_t mult[8];
     uint8_t config[14]; /* config bytes from CONFIGURE command */
 
-    uint8_t tx_buffer[0x4000];
+    uint8_t tx_buffer[PKT_BUF_SZ];
 
-    /* Statistical Counters*/
-    uint32_t crc_errs;
-    uint32_t aln_errs;
-    uint32_t rsc_errs;
-    uint32_t ovrn_errs;
-    uint32_t rcvd_frames;
-    uint32_t shrt_errs;
-
-    uint64_t last_irq_time;
-
+    int64_t last_tx_time;  /* Timestamp of last transmission in ns */
 };
 
 void i82596_h_reset(void *opaque);
