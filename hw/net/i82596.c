@@ -91,7 +91,6 @@ enum commands {
 #define I596_MC_ALL         (s->config[11] & 0x20)
 #define I596_MULTIIA        (s->config[13] & 0x40)
 
-#define I596_MEM_MODE       ((cmd >> 3) & 1)   /* memory mode, 0 = simplified, 1 = flexible */
 
 static uint8_t get_byte(uint32_t addr)
 {
@@ -621,7 +620,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     I82596State *s = qemu_get_nic_opaque(nc);
     uint32_t rfd_p;
     uint32_t rbd, last_used_rbd;
-    uint16_t is_broadcast = 0;
+    uint16_t is_broadcast = 0,status = 0;
     size_t len = sz; /* length of data for guest (including CRC) */
     size_t bufsz = sz; /* length of data in buf */
     uint32_t crc;
@@ -629,25 +628,14 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     const uint8_t *cur_buf_ptr;
     static const uint8_t broadcast_macaddr[6] = {
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-    bool is_ipv6 = false;
 
-    if (sz >= 14) {
-        uint16_t ethertype = (buf[12] << 8) | buf[13];
-        if (ethertype == 0x86DD) {
-            is_ipv6 = true;
-        }
-    }
-
-    // if (nc && nc->peer && !strcmp(nc->peer->name, "hub0port0") && sz > 350) {
-    //     sz = 346;  /* Forcing to expected size to prevent kernel panic */
-    // }
-
+    DBG(printf("i82596_receive() start\n"));
+    /* Pro larger packets to meet the size*/
     if (sz > PKT_BUF_SZ) {
         sz = PKT_BUF_SZ;
         bufsz = sz;
         len = sz;
     }
-
     if (USE_TIMER && timer_pending(s->flush_queue_timer)) {
         return 0;
     }
@@ -710,20 +698,14 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     crc = cpu_to_be32(crc32(~0, buf, sz));
     crc_ptr = (uint8_t *) &crc;
     cur_buf_ptr = buf;
-
-    uint16_t status = 0;
-    /* Get current RFD from SCB */
-    rfd_p = get_uint32(s->scb + 8);
+    rfd_p = get_uint32(s->scb + 8); /* get Receive Frame Descriptor */
     if (!rfd_p || rfd_p == I596_NULL) {
         s->rx_status = RX_NO_RESOURCES;
         s->scb_status |= SCB_STATUS_RNR;
         s->rsc_errs++;
-        status |= 0x0001;
         update_scb_status(s);
         return -1;
     }
-
-    /* SCB + 8 = CMD_BLOCK Accessed by RFD_P which has the command block*/
 
     uint16_t command = get_uint16(rfd_p + 2);
     uint32_t next_rfd = get_uint32(rfd_p + 4);
@@ -733,16 +715,17 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         uint16_t rfd_size = get_uint16(rfd_p + 12);
         uint32_t rfd_data_addr = rfd_p + 16; /* RFD data area starts after header */
         uint16_t rfd_data_used = 0;
-        rbd = get_uint32(rfd_p + 8);
+        rbd = get_uint32(rfd_p + 8); /* first Receive Buffer Descriptor Address */
 
         if (rbd == I596_NULL) {
             s->rx_status = RX_NO_RESO_RBD;  /* RX_NO_RESOURCES with flag */
             s->scb_status |= SCB_STATUS_RNR;
             s->rsc_errs++;
-            status |= 0x0001;
             update_scb_status(s);
             return -1;
         }
+
+        trace_i82596_receive_packet(len);
 
         if (rfd_size > 0 && len > 0) {
             rfd_data_used = (len > rfd_size) ? rfd_size : len;
@@ -757,8 +740,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
                 address_space_write(&address_space_memory, rfd_data_addr,
                                    MEMTXATTRS_UNSPECIFIED, cur_buf_ptr, bufsz);
                 rfd_data_addr += bufsz;
-                uint16_t crc_in_rfd = rfd_data_used - bufsz;
-
+                uint16_t crc_in_rfd = (rfd_data_used > bufsz) ? (rfd_data_used - bufsz) : 0;
                 address_space_write(&address_space_memory, rfd_data_addr,
                                    MEMTXATTRS_UNSPECIFIED, crc_ptr, crc_in_rfd);
                 crc_ptr += crc_in_rfd;
@@ -775,14 +757,14 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
         /* Process RBD chain */
         last_used_rbd = I596_NULL;
         int rbd_count = 0;
-
+        bool overrun = false;
         while (len > 0 && rbd != I596_NULL) {
             uint16_t buffer_size, count = 0;
             uint32_t rba, next_rbd;
             uint16_t rbd_status = 0;
             rbd_count++;
 
-            if (rbd == 0 || rbd >= 0xf0000000 || rbd < 0x1000) {
+            if (rbd == 0) {
                 if (last_used_rbd != I596_NULL) {
                     uint16_t last_status = get_uint16(last_used_rbd);
                     last_status |= I596_EOF;
@@ -828,7 +810,7 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
                 }
             }
 
-            /* Do we still need to write CRC? */
+            /* Write as much of the CRC as fits */
             if (len > 0) {
                 uint16_t crc_bytes = bytes_to_copy - count;
 
@@ -850,29 +832,24 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
             set_uint16(rbd, rbd_status);
             last_used_rbd = rbd;
 
-            /* Get next RBD */
+            /* get next rbd */
             rbd = next_rbd;
-        }
+            /* printf("Next Receive: rbd is %08x\n", rbd); */
 
-        if (len > 0) {
-            if (last_used_rbd != I596_NULL) {
-                uint16_t last_status = get_uint16(last_used_rbd);
-                last_status |= I596_EOF; /* Set EOF bit on last used RBD */
-                set_uint16(last_used_rbd, last_status);
-            } else {
-                status |= I596_EOF; /* No RBDs used, but EOF */
-            }
-
-            if (len > (sz * 0.4)) {
-                s->rx_status = RX_NO_MORE_RBD;
-                s->scb_status |= SCB_STATUS_RNR;
-                s->ovrn_errs++;
-                status |= 0x0200;
-                update_scb_status(s);
+            if (len > 0) {
+                overrun = true;
+                if (last_used_rbd != I596_NULL) {
+                    uint16_t last_status = get_uint16(last_used_rbd);
+                    last_status |= I596_EOF; /* Set EOF bit on last used RBD */
+                    set_uint16(last_used_rbd, last_status);
+                } else {
+                    status |= I596_EOF; /* No RBDs used, but EOF */
+                }
             }
         }
-
-        /* Update next RFD with pointer to next free RBD */
+        if(len > 0 || overrun) {
+            s->ovrn_errs++;
+        }
         if (next_rfd != I596_NULL && next_rfd != 0) {
             if (rbd != I596_NULL) {
                 set_uint32(next_rfd + 8, rbd);
@@ -901,19 +878,18 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 
         status |= I596_EOF;
     }
-    /* ---Everything functional till here. --- */
 
     status |= STAT_C | STAT_OK | is_broadcast;
     set_uint16(rfd_p, status);
 
-    if (command & CMD_SUSP) {
+    if (command & CMD_SUSP) {  /* suspend after command? */
         s->rx_status = RX_SUSPENDED;
-        s->scb_status |= SCB_STATUS_RNR;
+        s->scb_status |= SCB_STATUS_RNR; /* RU left active state */
+        return sz;
     }
-
-    if (command & CMD_EOL) {
-        /* This was the last Frame Descriptor - need reset */
+    if (command & CMD_EOL){/* was it last Frame Descriptor? */
         s->rx_status = RX_SUSPENDED;
+        return sz;
     }
 
     /* Update SCB to point to next RFD */
@@ -922,45 +898,14 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     }
 
     s->scb_status |= SCB_STATUS_FR; /* set "RU finished receiving frame" bit. */
-    update_scb_status(s);
-
-    /* Handle IRQ generation based on packet characteristics */
     s->rcvd_frames++;
-    uint64_t current_time = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    update_scb_status(s);
+    s->last_irq_time = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
-    bool generate_irq = false;
-    if (is_ipv6) {
-        generate_irq = true;
-    }
 
-    /* Important TCP control packets (SYN, FIN, RST) */
-    else if (sz >= 34 && ((buf[12] << 8) | buf[13]) == 0x0800) {  /* IPv4 */
-        uint8_t ip_proto = buf[23];
-        uint8_t tcp_flags = 0;
-
-        /* Check if TCP protocol and extract flags */
-        if (ip_proto == 6 && sz >= 54) {  /* TCP */
-            tcp_flags = buf[47];  /* TCP flags byte */
-            /* If SYN, FIN or RST flags set */
-            if (tcp_flags & 0x02 || tcp_flags & 0x01 || tcp_flags & 0x04) {
-                generate_irq = true;
-            }
-        }
-    }
-
-    else if ((s->rcvd_frames >= (s->rsc_errs > 0 ? 2 : 3)) || \
-    (current_time - s->last_irq_time > (s->rsc_errs > 0 ? 250000 : 400000))) {
-        generate_irq = true;
-    }
-    if (s->rx_status == RX_NO_MORE_RBD || s->rx_status == RX_NO_RESO_RBD) {
-        generate_irq = true;
-    }
-
-    if (generate_irq) {
-        qemu_set_irq(s->irq, 1);
-        s->rcvd_frames = 0;
-        s->last_irq_time = current_time;
-    }
+    /* send IRQ that we received data */
+    qemu_set_irq(s->irq, 1);
+    /* s->send_irq = 1; */
 
     return sz;
 }
