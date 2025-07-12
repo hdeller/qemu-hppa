@@ -1067,7 +1067,7 @@ static int i82596_process_simplified_mode(I82596State *s, uint32_t rfd_p, uint32
             rfd_status |= RFD_STATUS_TRUNC | RFD_STATUS_NOBUFS;
 
             /* If not configured to save bad frames, prepare RFD for reuse */
-            if (!I596_SAV_BAD_FRAME(s)) {
+            if (!SAVE_BAD_FRAMES) {
                 /* Reset the RFD for reuse */
                 set_uint16(rfd_p, 0); /* Clear status */
             }
@@ -1277,7 +1277,7 @@ static int i82596_process_flexible_mode(I82596State *s, uint32_t rfd_p, uint32_t
     printf("Remaining len: %zu\n", *len);
     
     /* Clear RFD rbd pointer after processing */
-    // set_uint32(rfd_p + 8, I596_NULL);
+    set_uint32(rfd_p + 8, I596_NULL);
     
     /* Update next RFD's rbd pointer if needed */
     if (next_rfd != I596_NULL && next_rfd != 0) {
