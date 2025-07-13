@@ -606,7 +606,6 @@ static int i82596_validate_receive_state(I82596State *s, size_t *sz, size_t *buf
         trace_i82596_receive_analysis(">>> Packet size invalid");
         return -1;
     }
-
     if (s->rx_status == RX_SUSPENDED) {
         trace_i82596_receive_analysis(">>> Receiving is suspended");
         return -1;
@@ -1042,8 +1041,8 @@ static int i82596_process_flexible_mode(I82596State *s, uint32_t rfd_p, uint32_t
     printf("Remaining len: %zu\n", *len);
 
     /* Clear RFD rbd pointer after processing */
-    set_uint32(rfd_p + 8, I596_NULL);
-
+    // set_uint32(rfd_p + 8, I596_NULL);
+    
     /* Update next RFD's rbd pointer if needed */
     if (next_rfd != I596_NULL && next_rfd != 0) {
         if (rbd != I596_NULL) {
