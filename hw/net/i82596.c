@@ -1059,6 +1059,72 @@ static int i82596_process_flexible_mode(I82596State *s, uint32_t rfd_p, uint32_t
     return 0;
 }
 
+ssize_t i82596_receive_iov(NetClientState *nc, const struct iovec *iov, int iovcnt)
+{
+    size_t sz = 0;
+    uint8_t *buf;
+    int i;
+    ssize_t ret;
+
+    printf("====== i82596_receive_iov() START ======\n");
+    printf("IOV count: %d\n", iovcnt);
+
+    /* Calculate total packet size */
+    for (i = 0; i < iovcnt; i++) {
+        printf("IOV[%d] length: %zu\n", i, iov[i].iov_len);
+        sz += iov[i].iov_len;
+    }
+    printf("Total packet size: %zu bytes\n", sz);
+
+    /* If no data, return immediately */
+    if (sz == 0) {
+        printf("ERROR: Zero-sized packet, returning -1\n");
+        return -1;
+    }
+
+    /* Allocate temporary buffer for the complete packet */
+    buf = g_malloc(sz);
+    if (!buf) {
+        printf("ERROR: Memory allocation failed for packet buffer (size=%zu)\n", sz);
+        return -1;
+    }
+    printf("Buffer allocated successfully at %p\n", (void*)buf);
+
+    /* Copy data from I/O vector elements to the buffer */
+    size_t offset = 0;
+    for (i = 0; i < iovcnt; i++) {
+        printf("Copying IOV[%d]: %zu bytes to offset %zu\n", i, iov[i].iov_len, offset);
+        if (iov[i].iov_base == NULL) {
+            printf("ERROR: IOV[%d] has NULL base pointer\n", i);
+            g_free(buf);
+            return -1;
+        }
+        memcpy(buf + offset, iov[i].iov_base, iov[i].iov_len);
+        offset += iov[i].iov_len;
+    }
+    printf("All IOV segments copied, total size: %zu bytes\n", offset);
+
+    /* Print first few bytes for debugging */
+    if (sz >= 14) {
+        printf("Packet header: %02x:%02x:%02x:%02x:%02x:%02x -> %02x:%02x:%02x:%02x:%02x:%02x, type=%02x%02x\n",
+               buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],  /* Source MAC */
+               buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],    /* Destination MAC */
+               buf[12], buf[13]);                                 /* EtherType */
+    }
+
+    /* Call the existing receive function */
+    printf("Calling i82596_receive()...\n");
+    ret = i82596_receive(nc, buf, sz);
+    printf("i82596_receive() returned: %zd\n", ret);
+
+    /* Clean up */
+    printf("Freeing temporary buffer\n");
+    g_free(buf);
+
+    printf("====== i82596_receive_iov() END ======\n");
+    return ret;
+}
+
 ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
 {
     I82596State *s = qemu_get_nic_opaque(nc);

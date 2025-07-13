@@ -48,10 +48,8 @@ struct I82596State_st {
 void i82596_h_reset(void *opaque);
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val);
 uint32_t i82596_ioport_readw(void *opaque, uint32_t addr);
-void i82596_ioport_writel(void *opaque, uint32_t addr, uint32_t val);
-uint32_t i82596_ioport_readl(void *opaque, uint32_t addr);
-uint32_t i82596_bcr_readw(I82596State *s, uint32_t rap);
 ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t size_);
+ssize_t i82596_receive_iov(NetClientState *nc, const struct iovec *iov, int iovcnt);
 bool i82596_can_receive(NetClientState *nc);
 void i82596_set_link_status(NetClientState *nc);
 void i82596_common_init(DeviceState *dev, I82596State *s, NetClientInfo *info);

@@ -93,6 +93,7 @@ static NetClientInfo net_lasi_82596_info = {
     .size = sizeof(NICState),
     .can_receive = i82596_can_receive,
     .receive = i82596_receive,
+    .receive_iov = i82596_receive_iov,
     .link_status_changed = i82596_set_link_status,
 };
 
