@@ -24,6 +24,11 @@ struct I82596State_st {
     NICConf conf;
     QEMUTimer *flush_queue_timer;
 
+    QEMUTimer *throttle_timer;
+    uint16_t t_on;
+    uint16_t t_off;
+    bool throttle_state;
+
     hwaddr scp;         /* pointer to SCP */
     uint8_t sysbus;
     uint32_t scb;       /* SCB */

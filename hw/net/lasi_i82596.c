@@ -86,6 +86,10 @@ static const MemoryRegionOps lasi_82596_mem_ops = {
         .min_access_size = 4,
         .max_access_size = 4,
     },
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+    },
 };
 
 static NetClientInfo net_lasi_82596_info = {

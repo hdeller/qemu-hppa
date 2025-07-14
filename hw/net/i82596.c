@@ -23,7 +23,7 @@
 #include "i82596.h"
 #include <zlib.h> /* for crc32 */
 
-// #define ENABLE_DEBUG    1
+#define ENABLE_DEBUG    1
 #if defined(ENABLE_DEBUG)
 #define DBG(x)          x
 #else
@@ -38,6 +38,9 @@
 
 #define ISCP_BUSY       0x0001
 #define TX_TIMEOUT	(HZ/20)
+#define I82596_SPEED_MBPS    10
+#define I82596_BYTES_PER_SEC (I82596_SPEED_MBPS * 1000000 / 8)
+
 
 
 #define I596_NULL       ((uint32_t)0xffffffff)
@@ -50,6 +53,22 @@
 
 #define SCB_COMMAND_ACK_MASK \
 (SCB_STATUS_CX | SCB_STATUS_FR | SCB_STATUS_CNA | SCB_STATUS_RNR)
+
+/* SCB commands - Command Unit (CU) */
+#define SCB_CUC_NOP            0x00
+#define SCB_CUC_START          0x01
+#define SCB_CUC_RESUME         0x02
+#define SCB_CUC_SUSPEND        0x03
+#define SCB_CUC_ABORT          0x04
+#define SCB_CUC_LOAD_THROTTLE  0x05
+#define SCB_CUC_LOAD_START     0x06
+
+/* SCB commands - Receive Unit (RU) */
+#define SCB_RUC_NOP            0x00
+#define SCB_RUC_START          0x01
+#define SCB_RUC_RESUME         0x02
+#define SCB_RUC_SUSPEND        0x03
+#define SCB_RUC_ABORT          0x04
 
 #define CU_IDLE         0
 #define CU_SUSPENDED    1
@@ -97,6 +116,7 @@ enum commands {
 #define I596_MIN_FRAME_LEN  (s->config[10])         /* minimum frame length */
 #define I596_CRCINM         (s->config[11] & 0x04)  /* Rx CRC appended in memory */
 #define I596_MC_ALL         (s->config[11] & 0x20)
+#define I596_FULL_DUPLEX    (s->config[12] & 0x40)  /* full duplex mode */
 #define I596_MULTIIA        (s->config[13] & 0x40)
 
 
@@ -155,6 +175,14 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
     uint16_t tx_data_len = 0;
     int insert_crc;
 
+
+    if (!s->throttle_state && !I596_FULL_DUPLEX) {
+        /* In half duplex mode, defer transmission until throttle is on */
+        DBG(printf("TX COLLISION: Half duplex collision detected, deferring transmission\n"));
+        timer_mod(s->flush_queue_timer,
+                 qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 10);
+        return;
+    }
     cmd = get_uint16(addr + 2);
     assert(cmd & CMD_FLEX);    /* check flexible mode */
 
@@ -249,6 +277,107 @@ static void i82596_transmit(I82596State *s, uint32_t addr)
     }
 }
 
+static void i82596_bus_throttle_timer(void *opaque)
+{
+    I82596State *s = opaque;
+
+    if (s->cu_status != CU_ACTIVE) {
+        timer_del(s->throttle_timer);
+        return;
+    }
+
+    if (s->throttle_state) {
+        /* Currently ON, switch to OFF */
+        DBG(printf("THROTTLE: Switching from ON to OFF (duplex=%s)\n", 
+                   I596_FULL_DUPLEX ? "full" : "half"));
+        s->throttle_state = false;
+
+        if (s->t_off > 0) {
+            /* Add jitter for half duplex to simulate CSMA/CD randomness */
+            int delay = s->t_off;
+            if (!I596_FULL_DUPLEX && s->t_off > 10) {
+                int jitter = s->t_off / 5;
+                int actual_jitter = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) % jitter;
+                delay += actual_jitter;
+                DBG(printf("THROTTLE: Half-duplex jitter added: %d microseconds\n", 
+                           actual_jitter));
+            }
+            
+            timer_mod(s->throttle_timer,
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                     delay * 1000);
+            DBG(printf("THROTTLE: OFF for %d microseconds\n", delay));
+        } else {
+            s->throttle_state = true;
+            DBG(printf("THROTTLE: No OFF time specified, staying ON\n"));
+        }
+    } else {
+        DBG(printf("THROTTLE: Switching from OFF to ON (duplex=%s)\n", 
+                   I596_FULL_DUPLEX ? "full" : "half"));
+        s->throttle_state = true;
+
+        if (s->t_on > 0 && s->t_on != 0xFFFF) {
+            timer_mod(s->throttle_timer,
+                     qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                     s->t_on * 1000);
+            DBG(printf("THROTTLE: ON for %d microseconds\n", s->t_on));
+        } else {
+            DBG(printf("THROTTLE: Staying ON indefinitely (t_on=%d)\n", s->t_on));
+        }
+    }
+}
+
+static void i82596_load_throttle_timers(I82596State *s, bool start_now)
+{
+    uint32_t t_on_addr, t_off_addr;
+
+    /* Get previous values for comparison */
+    uint16_t prev_t_on = s->t_on;
+    uint16_t prev_t_off = s->t_off;
+
+    /* TODO: Change offset based on the Linear or Segmented mode */
+    t_on_addr = s->scb + 0x1E;
+    t_off_addr = s->scb + 0x20;
+
+    /* Read T-ON and T-OFF values */
+    s->t_on = get_uint16(t_on_addr);
+    s->t_off = get_uint16(t_off_addr);
+
+    if (prev_t_on != s->t_on || prev_t_off != s->t_off) {
+        DBG(printf("THROTTLE PARAMS: Changed from ON=%d,OFF=%d to ON=%d,OFF=%d\n",
+                   prev_t_on, prev_t_off, s->t_on, s->t_off));
+    }
+
+    DBG(printf("THROTTLE LOAD: T-ON=%d, T-OFF=%d, start=%d, duplex=%s\n",
+               s->t_on, s->t_off, start_now, I596_FULL_DUPLEX ? "full" : "half"));
+
+    if (start_now) {
+        if (!s->throttle_timer) {
+            s->throttle_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                           i82596_bus_throttle_timer, s);
+            DBG(printf("THROTTLE: Created new timer\n"));
+        } else {
+            timer_del(s->throttle_timer);
+            DBG(printf("THROTTLE: Deleted existing timer\n"));
+        }
+
+        /* Start with the bus ON */
+        s->throttle_state = true;
+        DBG(printf("THROTTLE: Starting with state ON\n"));
+
+        /* Schedule the T-ON timer if not infinite */
+        if (s->t_on > 0 && s->t_on != 0xFFFF) {
+            timer_mod(s->throttle_timer,
+                      qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                      s->t_on * 1000);
+            DBG(printf("THROTTLE: Scheduled ON timer for %d microseconds\n", s->t_on));
+        } else {
+            DBG(printf("THROTTLE: No timer scheduled (t_on=%d)\n", s->t_on));
+        }
+    }
+}
+
+
 static void set_individual_address(I82596State *s, uint32_t addr)
 {
     NetClientState *nc;
@@ -276,10 +405,72 @@ static void i82596_configure(I82596State *s, uint32_t addr)
     s->config[2] &= 0x82; /* mask valid bits */
     s->config[2] |= 0x40;
     s->config[7]  &= 0xf7; /* clear zero bit */
-    // assert(I596_NOCRC_INS == 0); /* do CRC insertion */
-    // s->config[10] = MAX(s->config[10], 5); /* min frame length */
-    s->config[12] &= 0x40; /* only full duplex field valid */
+    
+    /* Preserve full duplex bit in config[12] - the OS will set this correctly */
+    if (byte_cnt > 12) {
+        s->config[12] &= 0x40; /* Preserve only full duplex bit */
+        DBG(printf("Full duplex mode: %s\n", I596_FULL_DUPLEX ? "ON" : "OFF"));
+    }
+    
     s->config[13] |= 0x3f; /* set ones in byte 13 */
+    
+    /* Configure throttling parameters to enforce 10Mbps speed limit */
+    if (byte_cnt > 12) {
+        bool previous_duplex = I596_FULL_DUPLEX;
+        s->config[12] &= 0x40; /* Preserve only full duplex bit */
+        
+        if (previous_duplex != I596_FULL_DUPLEX) {
+            DBG(printf("DUPLEX: Mode changed to %s duplex\n", 
+                       I596_FULL_DUPLEX ? "FULL" : "HALF"));
+        }
+        DBG(printf("DUPLEX: Current mode is %s\n", I596_FULL_DUPLEX ? "FULL" : "HALF"));
+    }
+    
+    /* Configure throttling parameters to enforce 10Mbps speed limit */
+    bool duplex_changed = false;
+    static bool last_duplex_state = false;
+    
+    if (byte_cnt > 12) {
+        duplex_changed = ((I596_FULL_DUPLEX) != last_duplex_state);
+        if (duplex_changed) {
+            DBG(printf("DUPLEX: State transition from %s to %s\n",
+                       last_duplex_state ? "FULL" : "HALF",
+                       I596_FULL_DUPLEX ? "FULL" : "HALF"));
+        }
+        last_duplex_state = I596_FULL_DUPLEX;
+    }
+    
+    /* Only update throttle parameters if they haven't been set or duplex mode changed */
+    if (s->t_on == 0xFFFF || duplex_changed) {
+        /* Calculate throttling parameters for 10Mbps */
+        uint32_t bytes_per_us = I82596_BYTES_PER_SEC / 1000000;
+        uint16_t packet_time_us;
+        
+        /* Standard 1500 byte packet at 10Mbps takes ~1.2ms */
+        packet_time_us = 1500 / bytes_per_us; /* ~1200μs at 10Mbps */
+        
+        if (I596_FULL_DUPLEX) {
+            /* Full duplex: less throttling needed */
+            s->t_on = packet_time_us * 5;
+            s->t_off = packet_time_us / 20; /* Very short off time */
+            DBG(printf("THROTTLE CONFIG: Full duplex - ON=%d, OFF=%d microseconds\n", 
+                      s->t_on, s->t_off));
+        } else {
+            /* Half duplex: more throttling to simulate collisions and CSMA/CD */
+            s->t_on = packet_time_us;
+            s->t_off = packet_time_us / 5; /* 20% off time */
+            DBG(printf("THROTTLE CONFIG: Half duplex - ON=%d, OFF=%d microseconds\n", 
+                      s->t_on, s->t_off));
+        }
+        
+        /* Start throttling with new parameters */
+        i82596_load_throttle_timers(s, true);
+    }
+    
+    if (s->rx_status == RX_READY) {
+        timer_mod(s->flush_queue_timer,
+                qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 100);
+    }
 }
 
 static void set_multicast_list(I82596State *s, uint32_t addr)
@@ -306,11 +497,26 @@ static void set_multicast_list(I82596State *s, uint32_t addr)
     trace_i82596_set_multicast(mc_count);
 }
 
+static void set_rdt(I82596State *s, uint32_t rfd_p)
+{
+    /* Schedule with medium delay after descriptor update */
+    if (s->rx_status == RX_READY) {
+        timer_mod(s->flush_queue_timer,
+                 qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 10);
+    }
+}
+
 void i82596_set_link_status(NetClientState *nc)
 {
-    I82596State *d = qemu_get_nic_opaque(nc);
-
-    d->lnkst = nc->link_down ? 0 : 0x8000;
+    I82596State *s = qemu_get_nic_opaque(nc);
+    bool was_up = s->lnkst != 0;
+    
+    s->lnkst = nc->link_down ? 0 : 0x8000;
+    bool is_up = s->lnkst != 0;
+    
+    if (!was_up && is_up && s->rx_status == RX_READY) {
+        qemu_flush_queued_packets(qemu_get_queue(s->nic));
+    }
 }
 
 static void update_scb_status(I82596State *s)
@@ -332,168 +538,293 @@ static void i82596_s_reset(I82596State *s)
     s->cmd_p = I596_NULL;
     s->lnkst = 0x8000; /* initial link state: up */
     s->ca = s->ca_active = 0;
+    
+    /* Initialize throttle parameters for 10Mbps */
+    uint32_t bytes_per_us = I82596_BYTES_PER_SEC / 1000000;
+    uint16_t packet_time_us = 1500 / bytes_per_us; /* ~1200μs at 10Mbps */
+    
+    /* Default to half duplex mode with appropriate throttling */
+    s->t_on = packet_time_us;
+    s->t_off = packet_time_us / 5; /* 20% off time for half duplex */
+    s->throttle_state = true;
+    
+    if (s->throttle_timer) {
+        timer_del(s->throttle_timer);
+    }
+    
+    /* Start throttling with new parameters */
+    if (s->throttle_timer) {
+        timer_mod(s->throttle_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                 s->t_on * 1000);
+    }
+    
+    /* Stop the flush queue timer */
+    if (s->flush_queue_timer) {
+        timer_del(s->flush_queue_timer);
+    }
 }
-
 
 static void command_loop(I82596State *s)
 {
-    uint16_t cmd;
-    uint16_t status;
+    uint16_t cmd, status;
+    uint32_t next_cmd_addr;
 
     DBG(printf("STARTING COMMAND LOOP cmd_p=%08x\n", s->cmd_p));
 
-    while (s->cmd_p != I596_NULL) {
-        /* set status */
+    while (s->cmd_p != I596_NULL && s->cmd_p != 0 && s->cu_status == CU_ACTIVE) {
+        /* To prevent overrlaps, 
+         * Check if command is already in progress or completed 
+         */
+        status = get_uint16(s->cmd_p);
+        if (status & (STAT_C | STAT_B)) {
+            /* Command already busy or complete, move to next command */
+            next_cmd_addr = get_uint32(s->cmd_p + 4);
+            if (next_cmd_addr == 0 || next_cmd_addr == s->cmd_p) {
+                s->cmd_p = I596_NULL;
+                s->cu_status = CU_IDLE;
+                s->scb_status |= SCB_STATUS_CNA;
+                break;
+            }
+            s->cmd_p = next_cmd_addr;
+            continue;
+        }
+        
+        /* Mark command as busy */
         status = STAT_B;
         set_uint16(s->cmd_p, status);
-        status = STAT_C | STAT_OK; /* update, but write later */
-
+        
+        /* Prepare completed status but write later */
+        status = STAT_C | STAT_OK;
+        
+        /* Get command word */
         cmd = get_uint16(s->cmd_p + 2);
         DBG(printf("Running command %04x at %08x\n", cmd, s->cmd_p));
-
+        
+        next_cmd_addr = get_uint32(s->cmd_p + 4);
+        if (next_cmd_addr == 0) {
+            next_cmd_addr = I596_NULL;
+        }
+        
+        /* Execute command based on type */
         switch (cmd & 0x07) {
         case CmdNOp:
+            /* No operation */
             break;
+            
         case CmdSASetup:
             set_individual_address(s, s->cmd_p);
             break;
+            
         case CmdConfigure:
             i82596_configure(s, s->cmd_p);
             break;
+            
         case CmdTDR:
             /* get signal LINK */
             set_uint32(s->cmd_p + 8, s->lnkst);
             break;
+            
         case CmdTx:
             i82596_transmit(s, s->cmd_p);
             break;
+            
         case CmdMulticastList:
             set_multicast_list(s, s->cmd_p);
             break;
+            
         case CmdDump:
-            // i82596_dump_premature(s, s->cmd_p + 8);
-            /* set status */
-            status = STAT_C | STAT_OK;
-            set_uint16(s->cmd_p, status);
             DBG(printf("Dumped statistics to memory at %08x\n", s->cmd_p + 8));
             break;
+            
         case CmdDiagnose:
-            printf("FIXME Command %d !!\n", cmd & 7);
-            g_assert_not_reached();
+            printf("Command Diagnose not implemented\n");
+            status = STAT_C; /* Completed but not OK */
+            break;
         }
 
-        /* update status */
+        /* Update command status */
         set_uint16(s->cmd_p, status);
-
-        s->cmd_p = get_uint32(s->cmd_p + 4); /* get link address */
-        DBG(printf("NEXT addr would be %08x\n", s->cmd_p));
-        if (s->cmd_p == 0) {
-            s->cmd_p = I596_NULL;
-        }
-
-        /* Stop when last command of the list. */
-        if (cmd & CMD_EOL) {
-            s->cmd_p = I596_NULL;
-        }
-        /* Suspend after doing cmd? */
-        if (cmd & CMD_SUSP) {
-            s->cu_status = CU_SUSPENDED;
-            printf("FIXME SUSPEND !!\n");
-        }
+        
+        /* Process command control flags */
+        bool end_processing = false;
+        
         /* Interrupt after doing cmd? */
         if (cmd & CMD_INTR) {
             s->scb_status |= SCB_STATUS_CX;
+            s->send_irq = 1;
         } else {
             s->scb_status &= ~SCB_STATUS_CX;
         }
-        update_scb_status(s);
-
-        /* Interrupt after doing cmd? */
-        if (cmd & CMD_INTR) {
-            s->send_irq = 1;
+        
+        /* Suspend after doing cmd? */
+        if (cmd & CMD_SUSP) {
+            s->cu_status = CU_SUSPENDED;
+            s->scb_status |= SCB_STATUS_CNA;
+            end_processing = true;
+        }
+        
+        /* End of list? */
+        if (cmd & CMD_EOL) {
+            s->cmd_p = I596_NULL;
+            s->cu_status = CU_IDLE;
+            s->scb_status |= SCB_STATUS_CNA;
+            end_processing = true;
+        } else {
+            /* Move to next command */
+            if (next_cmd_addr == s->cmd_p) {
+                /* Circular reference, stop processing */
+                s->cmd_p = I596_NULL;
+                s->cu_status = CU_IDLE;
+                s->scb_status |= SCB_STATUS_CNA;
+                end_processing = true;
+            } else {
+                s->cmd_p = next_cmd_addr;
+            }
         }
 
-        if (s->cu_status != CU_ACTIVE) {
+        update_scb_status(s);
+
+        if (end_processing || s->cu_status != CU_ACTIVE) {
             break;
         }
     }
-    DBG(printf("FINISHED COMMAND LOOP\n"));
-    qemu_flush_queued_packets(qemu_get_queue(s->nic));
+
+    update_scb_status(s);
+
+    if (s->rx_status == RX_READY) {
+        qemu_flush_queued_packets(qemu_get_queue(s->nic));
+    }
 }
 
 static void i82596_flush_queue_timer(void *opaque)
 {
     I82596State *s = opaque;
-    if (0) {
-        timer_del(s->flush_queue_timer);
+
+    /* Only flush if receiver is in ready state */
+    if (s->rx_status == RX_READY) {
         qemu_flush_queued_packets(qemu_get_queue(s->nic));
-        timer_mod(s->flush_queue_timer,
-              qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 1000);
-    }
+    }    
 }
 
 static void examine_scb(I82596State *s)
 {
     uint16_t command, cuc, ruc;
 
-    /* get the scb command word */
+    /* Get the SCB command word */
     command = get_uint16(s->scb + 2);
-    cuc = (command >> 8) & 0x7;
-    ruc = (command >> 4) & 0x7;
+    cuc = (command >> 8) & 0x7; /* Command Unit Command */
+    ruc = (command >> 4) & 0x7; /* Receive Unit Command */
     DBG(printf("MAIN COMMAND %04x  cuc %02x ruc %02x\n", command, cuc, ruc));
-    /* and clear the scb command word */
+    
+    /* Clear the SCB command word */
     set_uint16(s->scb + 2, 0);
 
+    /* Handle interrupt acknowledgment */
     s->scb_status &= ~(command & SCB_COMMAND_ACK_MASK);
 
+    /* Process Command Unit Command */
     switch (cuc) {
-    case 0:     /* no change */
+    case SCB_CUC_NOP:
+        /* No operation */
         break;
-    case 1:     /* CUC_START */
+        
+    case SCB_CUC_START:
+        /* Start Command Unit */
         s->cu_status = CU_ACTIVE;
+        /* Set the command pointer from SCB */
+        s->cmd_p = get_uint32(s->scb + 4);
         break;
-    case 4:     /* CUC_ABORT */
+        
+    case SCB_CUC_RESUME:
+        /* Resume Command Unit */
+        if (s->cu_status == CU_SUSPENDED) {
+            s->cu_status = CU_ACTIVE;
+        }
+        break;
+        
+    case SCB_CUC_SUSPEND:
+        /* Suspend Command Unit */
         s->cu_status = CU_SUSPENDED;
-        s->scb_status |= SCB_STATUS_CNA; /* CU left active state */
+        s->scb_status |= SCB_STATUS_CNA;
         break;
-    default:
-        printf("WARNING: Unknown CUC %d!\n", cuc);
+        
+    case SCB_CUC_ABORT:
+        /* Abort Command Unit */
+        s->cu_status = CU_IDLE;
+        s->scb_status |= SCB_STATUS_CNA;
+        break;
+        
+    case SCB_CUC_LOAD_THROTTLE:
+        i82596_load_throttle_timers(s, false);
+        break;
+        
+    case SCB_CUC_LOAD_START:
+        i82596_load_throttle_timers(s, true);
+        break;
     }
 
+    /* Process Receive Unit Command */
     switch (ruc) {
-    case 0:     /* no change */
+    case SCB_RUC_NOP:
+        /* No operation */
         break;
-    case 1:     /* RX_START */
-    case 2:     /* RX_RESUME */
-        s->rx_status = RX_IDLE;
-        if (USE_TIMER) {
-            timer_mod(s->flush_queue_timer, qemu_clock_get_ms(
-                                QEMU_CLOCK_VIRTUAL) + 1000);
+    case SCB_RUC_START:
+        s->rx_status = RX_READY;
+        uint32_t rfd = get_uint32(s->scb + 8);
+        if (rfd == 0 || rfd == I596_NULL) {
+            s->rx_status = RX_NO_RESOURCES;
+            s->scb_status |= SCB_STATUS_RNR;
+        } else {
+            set_rdt(s, rfd);
         }
         break;
-    case 3:     /* RX_SUSPEND */
-    case 4:     /* RX_ABORT */
+        
+    case SCB_RUC_RESUME:
+        /* Resume Receive Unit */
+        if (s->rx_status == RX_SUSPENDED) {
+            s->rx_status = RX_READY;
+            timer_mod(s->flush_queue_timer, 
+                     qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 10);
+        }
+        break;
+        
+    case SCB_RUC_SUSPEND:
+        /* Suspend Receive Unit */
         s->rx_status = RX_SUSPENDED;
-        s->scb_status |= SCB_STATUS_RNR; /* RU left active state */
+        s->scb_status |= SCB_STATUS_RNR;
+        /* Stop the flush timer when suspended */
+        timer_del(s->flush_queue_timer);
         break;
-    default:
-        printf("WARNING: Unknown RUC %d!\n", ruc);
+        
+    case SCB_RUC_ABORT:
+        /* Abort Receive Unit */
+        s->rx_status = RX_IDLE;
+        s->scb_status |= SCB_STATUS_RNR;
+        /* Stop the flush timer when aborted */
+        timer_del(s->flush_queue_timer);
+        break;
     }
 
-    if (command & 0x80) { /* reset bit set? */
+    /* Check for software reset */
+    if (command & 0x80) {
         i82596_s_reset(s);
-    }
-
-    /* execute commands from SCBL */
-    if (s->cu_status != CU_SUSPENDED) {
-        if (s->cmd_p == I596_NULL) {
-            s->cmd_p = get_uint32(s->scb + 4);
+    } else {
+        /* Execute commands if CU is active and not already processing commands */
+        if (s->cu_status == CU_ACTIVE) {
+            if (s->cmd_p == I596_NULL) {
+                s->cmd_p = get_uint32(s->scb + 4);
+            }
+            /* Update SCB status */
+            update_scb_status(s);
+            
+            /* Process any pending commands */
+            command_loop(s);
+        } else {
+            /* Just update SCB status */
+            update_scb_status(s);
         }
     }
-    /* update scb status */
-    update_scb_status(s);
-
-    command_loop(s);
 }
 
 static void signal_ca(I82596State *s)
@@ -533,6 +864,11 @@ static void signal_ca(I82596State *s)
     }
 }
 
+uint32_t i82596_ioport_readw(void *opaque, uint32_t addr)
+{
+    return -1;
+}
+
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
 {
     I82596State *s = opaque;
@@ -543,6 +879,11 @@ void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
         break;
     case PORT_ALTSCP:
         s->scp = val;
+        if (s->scp){
+            uint32_t iscp_addr = get_uint32(s->scp + 8);
+            set_uint16(iscp_addr, ISCP_BUSY); /* Set busy flag */
+            DBG(printf("ALTSCP: Set ISCP busy"));
+        }
         break;
     case PORT_ALTDUMP:
         // i82596_dump_premature(s, val);
@@ -553,38 +894,78 @@ void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
     }
 }
 
-uint32_t i82596_ioport_readw(void *opaque, uint32_t addr)
-{
-    return -1;
-}
 
 void i82596_h_reset(void *opaque)
 {
     I82596State *s = opaque;
-
+    
     i82596_s_reset(s);
 }
+
+static void i82596_record_error(I82596State *s, uint16_t error_type)
+{
+    uint32_t counter_addr;
+    uint16_t count;
+    
+    /* Map error types to counter addresses */
+    switch (error_type) {
+    case RFD_STATUS_NOBUFS:
+        counter_addr = s->scb + 20;  /* No buffer resources counter */
+        break;
+        case RFD_STATUS_TRUNC:
+        counter_addr = s->scb + 22;  /* Truncated frames counter */
+        break;
+        default:
+        return;
+    }
+    
+    /* Increment the appropriate counter */
+    count = get_uint16(counter_addr);
+    set_uint16(counter_addr, count + 1);
+}
+
+static void i82596_update_int(I82596State *s, bool send_irq)
+{
+    /* Similar to TULIP's tulip_update_int :) */
+    update_scb_status(s);
+
+    if (send_irq) {
+        qemu_set_irq(s->irq, 1);
+    }
+}
+
+/*
+ * All RX FUNCTIONALITY BELOW
+*/
 
 bool i82596_can_receive(NetClientState *nc)
 {
     I82596State *s = qemu_get_nic_opaque(nc);
 
+    /* In full duplex, we can receive during transmission */
+    if (!s->throttle_state && !I596_FULL_DUPLEX) {
+        DBG(printf("CAN_RX: FALSE - throttle off in half duplex\n"));
+        return false;
+    }
+
     if (s->rx_status == RX_SUSPENDED) {
+        DBG(printf("CAN_RX: FALSE - RX suspended\n"));
         return false;
     }
 
     if (!s->lnkst) {
+        DBG(printf("CAN_RX: FALSE - Link down\n"));
         return false;
     }
 
-    if(s->rx_status == RX_SUSPENDED) {
-        return false;
+    if (timer_pending(s->flush_queue_timer)) {
+        bool can_rx = s->rx_status == RX_READY;
+        DBG(printf("CAN_RX: %s - flush timer pending, rx_status=%d\n", 
+                  can_rx ? "TRUE" : "FALSE", s->rx_status));
+        return can_rx;
     }
 
-    if (USE_TIMER && !timer_pending(s->flush_queue_timer)) {
-        return true;
-    }
-
+    DBG(printf("CAN_RX: TRUE - all conditions passed\n"));
     return true;
 }
 
@@ -596,7 +977,7 @@ static void i82596_update_rx_state(I82596State *s, int new_state)
     if (new_state == RX_NO_RESOURCES || new_state == RX_SUSPENDED) {
         s->scb_status |= SCB_STATUS_RNR; /* RU left active state */
     }
-
+    
     update_scb_status(s);
 }
 
@@ -633,37 +1014,6 @@ static size_t i82596_buffer_boundary_check(size_t buffer_size, size_t used, size
     return requested; /* Entire request fits */
 }
 
-static void i82596_record_error(I82596State *s, uint16_t error_type)
-{
-    uint32_t counter_addr;
-    uint16_t count;
-
-    /* Map error types to counter addresses */
-    switch (error_type) {
-    case RFD_STATUS_NOBUFS:
-        counter_addr = s->scb + 20;  /* No buffer resources counter */
-        break;
-    case RFD_STATUS_TRUNC:
-        counter_addr = s->scb + 22;  /* Truncated frames counter */
-        break;
-    default:
-        return;
-    }
-
-    /* Increment the appropriate counter */
-    count = get_uint16(counter_addr);
-    set_uint16(counter_addr, count + 1);
-}
-
-static void i82596_update_int(I82596State *s, bool send_irq)
-{
-    /* Similar to TULIP's tulip_update_int */
-    update_scb_status(s);
-
-    if (send_irq) {
-        qemu_set_irq(s->irq, 1);
-    }
-}
 
 static bool i82596_check_packet_filter(I82596State *s, const uint8_t *buf, uint16_t *is_broadcast)
 {
@@ -733,6 +1083,8 @@ static ssize_t i82596_finalize_reception(I82596State *s, uint32_t rfd_p,
     /* Update SCB to point to next RFD */
     if (s->rx_status == RX_READY) {
         set_uint32(s->scb + 8, next_rfd);
+        /* Call set_rdt when updating the RFD pointer */
+        set_rdt(s, next_rfd);
     }
 
     s->scb_status |= SCB_STATUS_FR; /* set "RU finished receiving frame" bit. */
@@ -1138,6 +1490,14 @@ ssize_t i82596_receive(NetClientState *nc, const uint8_t *buf, size_t sz)
     bool sf_bit;
     int result;
 
+    if (!I596_FULL_DUPLEX && !s->throttle_state) {
+        /* In half duplex, if we're currently transmitting (bus off), 
+         * we would have a collision. Just drop the packet. */
+        DBG(printf("RX COLLISION: Half duplex collision detected, dropping packet (size=%zu)\n", 
+                  sz));
+        return sz; /* Pretend we received it */
+    }
+
     printf("====== i82596_receive() START ======\n");
     printf("Packet size: %zu bytes\n", sz);
     printf("RX status: %d\n", s->rx_status);
@@ -1232,5 +1592,13 @@ void i82596_common_init(DeviceState *dev, I82596State *s, NetClientInfo *info)
         s->flush_queue_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                     i82596_flush_queue_timer, s);
     }
+    
+    /* Initialize throttle timer */
+    s->throttle_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                    i82596_bus_throttle_timer, s);
+    s->throttle_state = true; /* Start in ON state */
+    s->t_on = 0xFFFF;         /* Default: infinite time on bus */
+    s->t_off = 0;             /* Default: no off time */
+    
     s->lnkst = 0x8000; /* initial link state: up */
 }
