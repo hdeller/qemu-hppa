@@ -23,31 +23,31 @@ struct I82596State_st {
     NICState *nic;
     NICConf conf;
     QEMUTimer *flush_queue_timer;
+    uint8_t mode;                   /* Determine the mode of 82596 */
 
     QEMUTimer *throttle_timer;
     uint16_t t_on;
     uint16_t t_off;
     bool throttle_state;
 
-    hwaddr scp;         /* pointer to SCP */
+    hwaddr scp;                     /* pointer to SCP */
     uint8_t sysbus;
-    uint32_t scb;       /* SCB */
+    uint32_t scb;                   /* SCB */
+    uint32_t scb_base;
     uint16_t scb_status;
     uint8_t cu_status, rx_status;
     uint16_t lnkst;
 
-    uint32_t cmd_p;     /* addr of current command */
+    uint32_t cmd_p;                 /* addr of current command */
     int ca;
     int ca_active;
     int send_irq;
 
     /* Hash register (multicast mask array, multiple individual addresses). */
     uint8_t mult[8];
-    uint8_t config[14]; /* config bytes from CONFIGURE command */
+    uint8_t config[14];             /* config bytes from CONFIGURE command */
 
     uint8_t tx_buffer[PKT_BUF_SZ];
-
-    int64_t last_tx_time;  /* Timestamp of last transmission in ns */
 };
 
 void i82596_h_reset(void *opaque);
