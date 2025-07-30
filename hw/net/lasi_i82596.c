@@ -27,6 +27,8 @@
 #define PA_CHANNEL_ATTENTION    8
 #define PA_GET_MACADDR          12
 
+#define PORT_BYTEMASK           0x0f
+
 #define SWAP32(x)   (((uint32_t)(x) << 16) | ((((uint32_t)(x))) >> 16))
 
 static void lasi_82596_mem_write(void *opaque, hwaddr addr,
@@ -39,15 +41,21 @@ static void lasi_82596_mem_write(void *opaque, hwaddr addr,
     case PA_I82596_RESET:
         i82596_h_reset(&d->state);
         break;
-    case PA_CPU_PORT_L_ACCESS:
-        d->val_index++;
+    case PA_CPU_PORT_L_ACCESS: {
+        uint16_t wval = val & 0xFFFF;
         if (d->val_index == 0) {
-            uint32_t v = d->last_val | (val << 16);
-            v = v & ~0xff;
-            i82596_ioport_writew(&d->state, d->last_val & 0xff, v);
+            d->last_val = wval;
+            d->val_index = 1;
+        } else {
+            uint32_t full_val = (wval << 16) | d->last_val;
+            full_val &= ~PORT_BYTEMASK;
+            uint8_t selector = d->last_val & PORT_BYTEMASK;
+
+            i82596_ioport_writew(&d->state, selector, full_val);
+            d->val_index = 0;
         }
-        d->last_val = val;
         break;
+    }
     case PA_CHANNEL_ATTENTION:
         i82596_ioport_writew(&d->state, PORT_CA, val);
         break;
