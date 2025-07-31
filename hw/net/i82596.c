@@ -941,7 +941,7 @@ static void signal_ca(I82596State *s)
         /* Clear BUSY flag in ISCP, set CX and CNR to equal 1 in the SCB, clears the SCB command word, 
          * sends an interrupt to the CPU, and awaits another Channel Attention signal. */
         set_byte(iscp + 1, 0);
-        s->scb_status |= SCB_STATUS_CX | SCB_STATUS_CNA | SCB_STATUS_RNR;
+        s->scb_status |= SCB_STATUS_CX | SCB_STATUS_CNA; // AVOID: SCB_STATUS_RNR;
         update_scb_status(s);
         /* Clear the SCB command word */
         set_uint16(s->scb + 2, 0);
@@ -980,6 +980,12 @@ void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
     switch (addr) {
     case PORT_RESET: /* Reset */
         i82596_s_reset(s);
+        break;
+    case PORT_SELFTEST:
+        // printf("SELFTEST MEM  %04x %04x\n", get_uint32(val+0), get_uint32(val+4));
+        set_uint32(val, STAT_OK);
+        set_uint32(val + 4, 0);
+        qemu_set_irq(s->irq, 1);
         break;
     case PORT_ALTSCP:
         s->scp = val & ~0x0f;
