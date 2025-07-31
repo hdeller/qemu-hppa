@@ -42,6 +42,7 @@ static void lasi_82596_mem_write(void *opaque, hwaddr addr,
         i82596_h_reset(&d->state);
         break;
     case PA_CPU_PORT_L_ACCESS: {
+    printf("PA_CPU_PORT_L_ACCESS  size %d  addr %lx  val %lx\n", size, addr, (long)val);
         uint16_t wval = val & 0xFFFF;
         if (d->val_index == 0) {
             d->last_val = wval;

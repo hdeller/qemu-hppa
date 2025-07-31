@@ -23,7 +23,7 @@
 #include "i82596.h"
 #include <zlib.h> /* for crc32 */
 
-#define ENABLE_DEBUG    1
+// #define ENABLE_DEBUG    1
 #if defined(ENABLE_DEBUG)
 #define DBG(x)          x
 #else
@@ -604,7 +604,8 @@ static void update_scb_status(I82596State *s)
 static void i82596_s_reset(I82596State *s)
 {
     trace_i82596_s_reset(s);
-    s->scp = 0x00FFFFF4; /* SCB pointer */
+    s->scp = 0x00FFFFF4; /* default SCP pointer */
+    printf("i82596_s_reset\n");
     s->scb_status = 0;
     s->cu_status = CU_IDLE;
     s->rx_status = RX_IDLE;
@@ -895,19 +896,20 @@ static void examine_scb(I82596State *s)
 
 static void signal_ca(I82596State *s)
 {
-    uint32_t iscp = 0;
+    uint32_t iscp;
 
     /* trace_i82596_channel_attention(s); */
     if (s->scp) {
+        printf("RESET CA: scp %04lx: Words %04x %4x %04x\n", s->scp, get_uint32(s->scp), get_uint32(s->scp+4), get_uint32(s->scp+8));
         /* CA after reset -> do init with new scp. */
         s->sysbus = get_byte(s->scp + 3); /* big endian */
-        DBG(printf("SYSBUS = %02x\n", s->sysbus));
+        printf("SYSBUS = %02x\n", s->sysbus);
         s->mode = (s->sysbus >> 1) & 0x03; /* m0 & m1 */
 
-        DBG(printf("Mode set to %d (%s)\n", s->mode,
+        printf("Mode set to %d (%s)\n", s->mode,
                s->mode == I82586_MODE ? "82586" :
                s->mode == I82596_MODE_SEGMENTED ? "32-bit Segmented" :
-               s->mode == I82596_MODE_LINEAR ? "32-bit Linear" : "Unknown"));
+               s->mode == I82596_MODE_LINEAR ? "32-bit Linear" : "Unknown");
 
         if (s->mode != I82586_MODE &&
             s->mode != I82596_MODE_SEGMENTED &&
@@ -919,7 +921,7 @@ static void signal_ca(I82596State *s)
 
         /* Get ISCP address - always a linear address regardless of mode */
         iscp = get_uint32(s->scp + 8);
-        DBG(printf("ISCP address: 0x%08x\n", iscp));
+        printf("ISCP address: 0x%08x\n", iscp);
 
         /* Get SCB address */
         s->scb = get_uint32(iscp + 4);
@@ -927,20 +929,27 @@ static void signal_ca(I82596State *s)
         /* In segmented modes, we need to get the base address as well */
         if (s->mode == I82586_MODE || s->mode == I82596_MODE_SEGMENTED) {
             s->scb_base = get_uint32(iscp + 8); /* Get SCB base */
-            DBG(printf("SCB base set to 0x%08x\n", s->scb_base));
+            printf("SCB base set to 0x%08x\n", s->scb_base);
         } else {
             s->scb_base = 0;
         }
 
-        /* If we're not in linear mode, translate the SCB address */
-        if (s->mode != I82596_MODE_LINEAR) {
-            s->scb = i82596_translate_address(s, s->scb, false);
-            DBG(printf("Translated SCB address: 0x%08x\n", s->scb));
-        }
+        /* Translate the SCB address if neccessary */
+        s->scb = i82596_translate_address(s, s->scb, false);
+        printf("Translated SCB address: 0x%08x\n", s->scb);
 
-        /* When was it busy? we never used the ISCP_BUSY var?? Clear BUSY flag in ISCP */
+        /* Clear BUSY flag in ISCP, set CX and CNR to equal 1 in the SCB, clears the SCB command word, 
+         * sends an interrupt to the CPU, and awaits another Channel Attention signal. */
         set_byte(iscp + 1, 0);
+        s->scb_status |= SCB_STATUS_CX | SCB_STATUS_CNA | SCB_STATUS_RNR;
+        update_scb_status(s);
+        /* Clear the SCB command word */
+        set_uint16(s->scb + 2, 0);
+        // avoid further initializations
         s->scp = 0;
+        // send irq
+        qemu_set_irq(s->irq, 1);
+        return;
     }
 
     s->ca++;    /* count ca() */
@@ -967,22 +976,22 @@ uint32_t i82596_ioport_readw(void *opaque, uint32_t addr)
 void i82596_ioport_writew(void *opaque, uint32_t addr, uint32_t val)
 {
     I82596State *s = opaque;
-    /* printf("i82596_ioport_writew addr=0x%08x val=0x%04x\n", addr, val); */
+    printf("i82596_ioport_writew addr=0x%08x val=0x%04x\n", addr, val);
     switch (addr) {
     case PORT_RESET: /* Reset */
         i82596_s_reset(s);
         break;
     case PORT_ALTSCP:
-        s->scp = val;
+        s->scp = val & ~0x0f;
         if (s->scp){
-            uint32_t iscp_addr = get_uint32(s->scp + 8);
-            set_uint16(iscp_addr, ISCP_BUSY); /* Set busy flag */
-            DBG(printf("ALTSCP: Set ISCP busy"));
+            uint32_t iscp = get_uint32(s->scp + 8);
+            printf("ALTSCP: ISCP at %x: values %x and %x\n", iscp, get_uint32(iscp), get_uint32(iscp + 4));
         }
         break;
     case PORT_ALTDUMP:
         break;
     case PORT_CA:
+        printf("Channel attention\n");
         signal_ca(s);
         break;
     }
