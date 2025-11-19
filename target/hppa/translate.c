@@ -2558,10 +2558,47 @@ static bool trans_ixtlbx(DisasContext *ctx, arg_ixtlbx *a)
 #ifndef CONFIG_USER_ONLY
     TCGv_i64 addr;
     TCGv_i64 ofs, reg;
+    TCGv_i64 atl, stl;
 
     nullify_over(ctx);
 
-    form_gva(ctx, &addr, &ofs, a->b, 0, 0, 0, a->sp, 0, false);
+    /*
+     * FIXME:
+     *  if (a->fasttlb && not (pcxl or pcxl2))
+     *    return gen_illegal(ctx);
+     */
+
+    if (a->fasttlb) {
+        /*
+         * Implement the pcxl and pcxl2 Fast TLB Insert instructions.
+         * See
+         *     https://parisc.docs.kernel.org/en/latest/_downloads/41adec5a8ebe092789424db8bf4355a2/Pcxl2_ers.pdf
+         *     page 13-9 (195/206)
+         *
+         * The HP-UX kernel on the 9.07 install CD uses two undocumented
+         * instructions 05315440 and 0x05385400, which seem to execute as
+         * idtlba r17,(r9) idtlbp r24,(r9). That's why b is checked against 9.
+         */
+        if (a->b != 0 && a->b != 9) {
+            gen_illegal(ctx);
+        }
+
+        atl = tcg_temp_new_i64();
+        stl = tcg_temp_new_i64();
+        addr = tcg_temp_new_i64();
+
+        tcg_gen_ld32u_i64(stl, tcg_env,
+                          a->data ? offsetof(CPUHPPAState, cr[CR_ISR])
+                          : offsetof(CPUHPPAState, cr[CR_IIASQ]));
+        tcg_gen_ld32u_i64(atl, tcg_env,
+                          a->data ? offsetof(CPUHPPAState, cr[CR_IOR])
+                          : offsetof(CPUHPPAState, cr[CR_IIAOQ]));
+        tcg_gen_shli_i64(stl, stl, 32);
+        tcg_gen_or_i64(addr, atl, stl);
+    } else {
+        form_gva(ctx, &addr, &ofs, a->b, 0, 0, 0, a->sp, 0, false);
+    }
+
     reg = load_gpr(ctx, a->r);
     if (a->addr) {
         gen_helper_itlba_pa11(tcg_env, addr, reg);
@@ -2633,58 +2670,6 @@ static bool trans_pxtlbe(DisasContext *ctx, arg_ldst *a)
 
     trans_nop_addrx(ctx, a);
     gen_helper_ptlbe(tcg_env);
-
-    /* Exit TB for TLB change if mmu is enabled.  */
-    if (ctx->tb_flags & PSW_C) {
-        ctx->base.is_jmp = DISAS_IAQ_N_STALE;
-    }
-    return nullify_end(ctx);
-#endif
-}
-
-/*
- * Implement the pcxl and pcxl2 Fast TLB Insert instructions.
- * See
- *     https://parisc.wiki.kernel.org/images-parisc/a/a9/Pcxl2_ers.pdf
- *     page 13-9 (195/206)
- */
-static bool trans_ixtlbxf(DisasContext *ctx, arg_ixtlbxf *a)
-{
-    if (ctx->is_pa20) {
-        return false;
-    }
-    CHECK_MOST_PRIVILEGED(EXCP_PRIV_OPR);
-#ifndef CONFIG_USER_ONLY
-    TCGv_i64 addr, atl, stl;
-    TCGv_i64 reg;
-
-    nullify_over(ctx);
-
-    /*
-     * FIXME:
-     *  if (not (pcxl or pcxl2))
-     *    return gen_illegal(ctx);
-     */
-
-    atl = tcg_temp_new_i64();
-    stl = tcg_temp_new_i64();
-    addr = tcg_temp_new_i64();
-
-    tcg_gen_ld32u_i64(stl, tcg_env,
-                      a->data ? offsetof(CPUHPPAState, cr[CR_ISR])
-                      : offsetof(CPUHPPAState, cr[CR_IIASQ]));
-    tcg_gen_ld32u_i64(atl, tcg_env,
-                      a->data ? offsetof(CPUHPPAState, cr[CR_IOR])
-                      : offsetof(CPUHPPAState, cr[CR_IIAOQ]));
-    tcg_gen_shli_i64(stl, stl, 32);
-    tcg_gen_or_i64(addr, atl, stl);
-
-    reg = load_gpr(ctx, a->r);
-    if (a->addr) {
-        gen_helper_itlba_pa11(tcg_env, addr, reg);
-    } else {
-        gen_helper_itlbp_pa11(tcg_env, addr, reg);
-    }
 
     /* Exit TB for TLB change if mmu is enabled.  */
     if (ctx->tb_flags & PSW_C) {
