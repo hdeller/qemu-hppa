@@ -158,9 +158,15 @@ nop_addrx       000001 ..... ..... -- 01001110 . 00000  @addrx # pdc
 probe           000001 b:5 ri:5 sp:2 imm:1 100011 write:1 0 t:5
 
 # pa1.x tlb insert instructions
-# fasttlb: pcxl and pcxl2 Fast TLB Insert instructions
-ixtlbx          000001 b:5 r:5 ... data:1 0 fasttlb:1 000 addr:1 0 00000  \
-                    sp=%assemble_sr3x
+ixtlbx          000001 b:5 r:5 sp:2 0100000 addr:1 0 00000      data=1
+ixtlbx          000001 b:5 r:5 ... 000000 addr:1 0 00000        \
+                sp=%assemble_sr3x data=0
+
+# pcxl and pcxl2 Fast TLB Insert instructions
+ixtlbxf         000001 00000 r:5 00 0 data:1 01000 addr:1 0 00000
+ixtlbxf        0000 0101 001 r:5     01 0 data:1 0100 0 addr:1 0 0 0000
+# ixtlbx          0000 0101 001 r:5        sp:2 0 data:1 0100 0 addr:1 0 0 0000  b=9
+#05 31 54 40
 
 # pa2.0 tlb insert idtlbt and iitlbt instructions
 ixtlbt          000001 r2:5 r1:5 000 data:1 100000 0 00000    # idtlbt
