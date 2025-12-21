@@ -414,7 +414,7 @@ static bool mmap_frag(abi_ulong real_start, abi_ulong start, abi_ulong last,
 
 abi_ulong task_unmapped_base;
 abi_ulong elf_et_dyn_base;
-abi_ulong mmap_next_start;
+abi_ulong mmap_next_start, mmap_next_down;
 
 /*
  * Subroutine of mmap_find_vma, used when we have pre-allocated
@@ -451,7 +451,43 @@ abi_ulong mmap_find_vma(abi_ulong start, abi_ulong size, abi_ulong align)
 
     /* If 'start' == 0, then a default start address is used. */
     if (start == 0) {
-        start = mmap_next_start;
+        if (1 && TARGET_STACK_GROWSUP) { // LEGACY_VA_LAYOUT
+#if 0
+            abi_ulong max_addr;
+            size = ROUND_UP(size, host_page_size);
+            if (mmap_next_down == 0) {
+                mmap_next_down = guest_addr_max - TARGET_PAGE_SIZE;
+                mmap_next_down = 0xe8000000;
+            }
+            max_addr = mmap_next_down;
+            while (max_addr > size && max_addr >= mmap_min_addr) {
+                addr = page_find_range_empty_topdown(mmap_min_addr, max_addr, size, align);
+                ptr = MAP_FAILED;
+                if (addr != -1) {
+                    ptr = mmap(g2h_untagged(addr), size, PROT_NONE,
+                           MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
+                }
+          qemu_log("addr %x   ptr %p   size %d  guest_addr_max %lx\n", addr, ptr, size, guest_addr_max);
+                if (ptr != MAP_FAILED) {
+                    if (1 || h2g_valid(ptr + size - 1)) {
+          // qemu_log("guest_base %lx   guest_addr_max: %lx    ptr %p\n", guest_base, guest_addr_max, ptr);
+         // qemu_log("addr %x       h2g: %lx\n", addr, h2g(ptr));
+                        // addr = h2g(ptr);
+                        mmap_next_down = addr - TARGET_PAGE_SIZE;
+                        if ((addr & (align - 1)) == 0) {
+                            return addr;
+                        }
+                    }
+                    munmap(ptr, size);
+                }
+                addr -= size;
+                max_addr = addr;
+            }
+#else
+        }
+        // start = mmap_next_start;
+        start = 0x78000000;
+#endif
     } else {
         start &= -host_page_size;
     }

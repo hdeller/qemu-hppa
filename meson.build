@@ -3390,6 +3390,9 @@ foreach target : target_dirs
   if 'TARGET_BIG_ENDIAN' not in config_target
     config_target += {'TARGET_BIG_ENDIAN': 'n'}
   endif
+  if 'TARGET_STACK_GROWSUP' not in config_target
+    config_target += {'TARGET_STACK_GROWSUP': 'n'}
+  endif
 
   foreach k, v: disassemblers
     if host_arch.startswith(k) or config_target['TARGET_BASE_ARCH'].startswith(k)
@@ -3427,6 +3430,7 @@ foreach target : target_dirs
   if target.endswith('-softmmu')
     target_kconfig += 'CONFIG_' + config_target['TARGET_ARCH'].to_upper() + '=y'
     target_kconfig += 'CONFIG_TARGET_BIG_ENDIAN=' + config_target['TARGET_BIG_ENDIAN']
+    target_kconfig += 'CONFIG_TARGET_STACK_GROWSUP=' + config_target['TARGET_STACK_GROWSUP']
 
     # PVG is not cross-architecture.  Use accelerator_targets as a proxy to
     # figure out which target can support PVG on this host

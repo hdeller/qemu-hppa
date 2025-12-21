@@ -25,6 +25,7 @@ abi_long target_mremap(abi_ulong old_addr, abi_ulong old_size,
                        abi_ulong new_addr);
 
 abi_ulong mmap_find_vma(abi_ulong start, abi_ulong size, abi_ulong alignment);
+abi_ulong mmap_find_vma_downwards(abi_ulong size, abi_ulong align);
 
 void TSA_NO_TSA mmap_fork_start(void);
 void TSA_NO_TSA mmap_fork_end(int child);

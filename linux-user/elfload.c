@@ -399,6 +399,7 @@ static abi_ulong setup_arg_pages(struct linux_binprm *bprm,
                                  struct image_info *info)
 {
     abi_ulong size, error, guard;
+    abi_ulong stack_map_start = 0;
     int prot;
 
     size = guest_stack_size;
@@ -414,13 +415,15 @@ static abi_ulong setup_arg_pages(struct linux_binprm *bprm,
     } else {
         /* no guard page for hppa target where stack grows upwards. */
         guard = 0;
+        /* stack and head grow upwards, so put stack at top of memory */
+        stack_map_start =  guest_addr_max - guard - size;
     }
 
     prot = PROT_READ | PROT_WRITE;
     if (info->exec_stack) {
         prot |= PROT_EXEC;
     }
-    error = target_mmap(0, size + guard, prot,
+    error = target_mmap(stack_map_start, size + guard, prot,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (error == -1) {
         perror("mmap stack");
