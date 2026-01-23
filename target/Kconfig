@@ -19,6 +19,3 @@ source xtensa/Kconfig
 
 config TARGET_BIG_ENDIAN
     bool
-
-config TARGET_STACK_GROWSUP
-    bool

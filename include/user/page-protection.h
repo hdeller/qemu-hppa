@@ -78,22 +78,6 @@ bool page_check_range_empty(vaddr start, vaddr last);
 vaddr page_find_range_empty(vaddr min, vaddr max, vaddr len, vaddr align);
 
 /**
- * page_find_range_empty_topdown
- * @min: first byte of search range
- * @max: last byte of search range
- * @len: size of the hole required
- * @align: alignment of the hole required (power of 2)
- *
- * If there is a range [x, x+@len) within [@min, @max] such that
- * x % @align == 0, then return x.  Otherwise return -1.
- * This function behaves the same as @page_find_range_empty() but
- * searches a free hole from the top downwards of the given search range.
- * The memory lock must be held, as the caller will want to ensure
- * the returned range stays empty until a new mapping can be installed.
- */
-vaddr page_find_range_empty_topdown(vaddr min, vaddr max, vaddr len, vaddr align);
-
-/**
  * page_get_target_data
  * @address: guest virtual address
  * @size: per-page size

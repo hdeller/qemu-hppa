@@ -614,47 +614,6 @@ vaddr page_find_range_empty(vaddr min, vaddr max, vaddr len, vaddr align)
     }
 }
 
-vaddr page_find_range_empty_topdown(vaddr min, vaddr max, vaddr len, vaddr align)
-{
-    vaddr len_m1, align_m1;
-
-    assert(min <= max);
-    assert(max <= guest_addr_max);
-    assert(len != 0);
-    assert(is_power_of_2(align));
-    assert_memory_lock();
-
-    len_m1 = len - 1;
-    align_m1 = align - 1;
-
-    /* Iteratively narrow the search region from top to bottom. */
-    while (1) {
-        PageFlagsNode *p;
-
-        /* Align max and double-check there's enough space remaining. */
-        max -= len;
-        max &= ~align_m1;
-        if (min >= max) {
-            return -1;
-        }
-        if (len_m1 > max - min) {
-            return -1;
-        }
-
-        p = pageflags_find(max, max + len_m1);
-        if (p == NULL) {
-            /* Found! */
-            return max;
-        }
-        if (min >= p->itree.start) {
-            /* Existing allocation fills whole search region. */
-            return -1;
-        }
-        /* Skip across existing allocation. */
-        max = p->itree.start;
-    }
-}
-
 void tb_lock_page0(tb_page_addr_t address)
 {
     PageFlagsNode *p;
