@@ -380,7 +380,7 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
         /* BMC board: HP Diva GSP PCI card */
         dev = qdev_new("diva-gsp");
         if (dev && !object_property_get_bool(OBJECT(dev), "disable", NULL)) {
-            pci_dev = pci_new_multifunction(PCI_DEVFN(4, 0), "diva-gsp");
+            pci_dev = pci_new_multifunction(PCI_DEVFN(2, 0), "diva-gsp"); // A400 want DEVFN 4
             if (!lasi_dev) {
                 /* bind default keyboard/serial to Diva card */
                 qdev_prop_set_chr(DEVICE(pci_dev), "chardev1", serial_hd(0));
