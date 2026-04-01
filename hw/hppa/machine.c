@@ -45,6 +45,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(HppaMachineState, HPPA_COMMON_MACHINE)
 struct HppaMachineState {
     MachineState parent_obj;
 
+    DeviceState *lasi_dev;
     uint64_t memsplit_addr;
 };
 
@@ -52,8 +53,6 @@ struct HppaMachineState {
 
 #define HPA_POWER_BUTTON        (FIRMWARE_END - 0x10)
 static hwaddr soft_power_reg;
-
-static DeviceState *lasi_dev;
 
 static void hppa_powerdown_req(Notifier *n, void *opaque)
 {
@@ -400,7 +399,8 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
 {
     const char *kernel_filename = machine->kernel_filename;
     MachineClass *mc = MACHINE_GET_CLASS(machine);
-    DeviceState *dev;
+    HppaMachineState *hpm = HPPA_COMMON_MACHINE(machine);
+    DeviceState *dev, *lasi_dev;
     PCIDevice *pci_dev;
     long size;
     uint64_t kernel_entry = 0;
@@ -409,6 +409,7 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
     SysBusDevice *s;
 
     /* Graphics setup. */
+    lasi_dev = hpm->lasi_dev;
     if (lasi_dev && machine->enable_graphics &&
         vga_interface_type != VGA_NONE) {
         dev = qdev_new("artist");
@@ -577,7 +578,8 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
  */
 static void machine_HP_715_init(MachineState *machine)
 {
-    DeviceState *dev;
+    HppaMachineState *hpm = HPPA_COMMON_MACHINE(machine);
+    DeviceState *dev, *lasi_dev;
     MemoryRegion *addr_space = get_system_memory();
     TranslateFn *translate;
     ISABus *isa_bus;
@@ -597,6 +599,7 @@ static void machine_HP_715_init(MachineState *machine)
 
     /* Init Lasi chip */
     lasi_dev = DEVICE(lasi_init());
+    hpm->lasi_dev = lasi_dev;
     memory_region_add_subregion(addr_space, translate(NULL, LASI_HPA_715),
                                 sysbus_mmio_get_region(
                                     SYS_BUS_DEVICE(lasi_dev), 0));
@@ -653,7 +656,8 @@ static void machine_HP_715_init(MachineState *machine)
  */
 static void machine_HP_B160L_init(MachineState *machine)
 {
-    DeviceState *dev, *dino_dev;
+    HppaMachineState *hpm = HPPA_COMMON_MACHINE(machine);
+    DeviceState *dev, *dino_dev, *lasi_dev;
     MemoryRegion *addr_space = get_system_memory();
     TranslateFn *translate;
     ISABus *isa_bus;
@@ -670,6 +674,7 @@ static void machine_HP_B160L_init(MachineState *machine)
 
     /* Init Lasi chip */
     lasi_dev = DEVICE(lasi_init());
+    hpm->lasi_dev = lasi_dev;
     memory_region_add_subregion(addr_space, translate(NULL, LASI_HPA),
                                 sysbus_mmio_get_region(
                                     SYS_BUS_DEVICE(lasi_dev), 0));
