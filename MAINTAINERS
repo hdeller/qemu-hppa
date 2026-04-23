@@ -4075,6 +4075,7 @@ T: git https://github.com/qemu-bsd-user/qemu-bsd-user bsd-user-rebase-3.1
 
 Linux user
 M: Laurent Vivier <laurent@vivier.eu>
+M: Helge Deller <deller@gmx.de>
 R: Pierrick Bouvier <pierrick.bouvier@linaro.org>
 S: Odd Fixes
 F: linux-user/
