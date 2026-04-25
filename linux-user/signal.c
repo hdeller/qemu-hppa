@@ -689,7 +689,7 @@ void signal_init(const char *rtsig_map)
             sigaction(SIGABRT, NULL, &oact);
             sigaction(hsig, &act, NULL);
         } else {
-            struct sigaction *iact = core_dump_signal(tsig) ? &act : NULL;
+            struct sigaction *iact = 1 || core_dump_signal(tsig) ? &act : NULL;
             sigaction(hsig, iact, &oact);
         }
 
@@ -1053,6 +1053,10 @@ static void host_signal_handler(int host_sig, siginfo_t *info, void *puc)
         return;
     }
 
+if (host_sig == SIGALRM) {
+    fprintf(stderr, "SIGNAL 333333   %d\n", host_sig);
+}
+
     /*
      * Non-spoofed SIGSEGV and SIGBUS are synchronous, and need special
      * handling wrt signal blocking and unwinding.  Non-spoofed SIGILL,
@@ -1239,7 +1243,7 @@ int do_sigaction(int sig, const struct target_sigaction *act,
                  */
                 act1.sa_sigaction = (void *)SIG_IGN;
             } else if (k->_sa_handler == TARGET_SIG_DFL) {
-                if (core_dump_signal(sig)) {
+                if (1 || core_dump_signal(sig)) {
                     act1.sa_sigaction = host_signal_handler;
                 } else {
                     act1.sa_sigaction = (void *)SIG_DFL;
@@ -1267,6 +1271,7 @@ static void handle_pending_signal(CPUArchState *cpu_env, int sig,
     struct target_sigaction *sa;
     TaskState *ts = get_task_state(cpu);
 
+fprintf(stderr, "HELGE  %d\n", sig);
     trace_user_handle_signal(cpu_env, sig);
     /* dequeue signal */
     k->pending = 0;
@@ -1283,6 +1288,7 @@ static void handle_pending_signal(CPUArchState *cpu_env, int sig,
     tswap_siginfo(&k->info, &k->info);
 
     sig = gdb_handlesig(cpu, sig, NULL, &k->info, sizeof(k->info));
+fprintf(stderr, "HELGE  22222222222\n");
     if (!sig) {
         sa = NULL;
         handler = TARGET_SIG_IGN;

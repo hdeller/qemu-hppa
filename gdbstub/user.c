@@ -202,9 +202,17 @@ void gdb_qemu_exit(int code)
 int gdb_handlesig(CPUState *cpu, int sig, const char *reason, void *siginfo,
                   int siginfo_len)
 {
-    if (!gdbserver_state.init || gdbserver_user_state.fd < 0) {
+fprintf(stderr, "SIGNAL gdb_handlesig %d   %d  %d\n", sig, gdbserver_state.init, gdbserver_user_state.fd);
+    if (0) { // !gdbserver_state.init || gdbserver_user_state.fd < 0) {
         return sig;
     }
+// QEMU gdbstub does not report SIGALRM
+// https://gitlab.com/qemu-project/qemu/-/work_items/2214
+// Problem: an gdb reporten geht nur wenn wir alle Signale abfangen.
+// Dann bleibt gdb aber nicht stehe, dann hilft evtl:
+// hierzu hilft evtl:
+// Problem: QEMU does not stop other threads when hitting a breakpoint:
+// https://gitlab.com/qemu-project/qemu/-/work_items/2465
 
     if (siginfo) {
         /*
@@ -221,20 +229,26 @@ int gdb_handlesig(CPUState *cpu, int sig, const char *reason, void *siginfo,
     /* disable single step if it was enabled */
     cpu_single_step(cpu, 0);
 
+fprintf(stderr, "SIGNAL 1111\n");
     if (sig != 0) {
+fprintf(stderr, "SIGNAL 1a0\n");
         gdb_set_stop_cpu(cpu);
+fprintf(stderr, "SIGNAL 1a\n");
         if (gdbserver_state.allow_stop_reply) {
             g_string_printf(gdbserver_state.str_buf,
                             "T%02xthread:", gdb_target_signal_to_gdb(sig));
             gdb_append_thread_id(cpu, gdbserver_state.str_buf);
             g_string_append_c(gdbserver_state.str_buf, ';');
+fprintf(stderr, "SIGNAL 1b\n");
             if (reason) {
                 g_string_append(gdbserver_state.str_buf, reason);
             }
             gdb_put_strbuf();
+fprintf(stderr, "SIGNAL 1c\n");
             gdbserver_state.allow_stop_reply = false;
         }
     }
+fprintf(stderr, "SIGNAL 2222\n");
     /*
      * gdb_put_packet() might have detected that the peer terminated the
      * connection.
@@ -265,6 +279,7 @@ int gdb_handlesig(CPUState *cpu, int sig, const char *reason, void *siginfo,
             return sig;
         }
     }
+fprintf(stderr, "SIGNAL 1111\n");
     sig = gdbserver_state.signal;
     gdbserver_state.signal = 0;
     return sig;
@@ -446,6 +461,7 @@ static void do_gdb_handlesig(CPUState *cs, run_on_cpu_data arg)
 {
     int sig;
 
+fprintf(stderr, "do_gdb_handlesig i11111    %d\n", 111);
     sig = target_to_host_signal(gdb_handlesig(cs, 0, NULL, NULL, 0));
     if (sig >= 1 && sig < NSIG) {
         qemu_kill_thread(gdb_get_cpu_index(cs), sig);
@@ -514,6 +530,7 @@ bool gdbserver_start(const char *args, Error **errp)
     }
 
     if (suspend) {
+fprintf(stderr, "SUSPEND !!!!!!!!!!!!!!! %d\n", 1);
         if (gdbserver_accept(port, gdb_fd, port_or_path)) {
             gdb_handlesig(first_cpu, 0, NULL, NULL, 0);
             return true;
