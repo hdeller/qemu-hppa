@@ -61,7 +61,11 @@ config AHCI_SYSBUS
 config IDE_SII3112
     bool
     select IDE_PCI
-
+    
+config PC87560
+    bool
+    
+    
 config IDE_CF
     bool
     default y if IDE_BUS
