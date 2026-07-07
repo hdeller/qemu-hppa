@@ -92,7 +92,7 @@ static void fsl_imx6_init(Object *obj)
     }
     for (i = 0; i < FSL_IMX6_NUM_CANS; i++) {
         snprintf(name, NAME_SIZE, "flexcan%d", i + 1);
-        object_initialize_child(obj, name, &s->flexcan[i], TYPE_CAN_FLEXCAN);
+        object_initialize_child(obj, name, &s->flexcan[i], TYPE_CAN_FLEXCAN2);
     }
     for (i = 0; i < FSL_IMX6_NUM_WDTS; i++) {
         snprintf(name, NAME_SIZE, "wdt%d", i);
@@ -391,7 +391,8 @@ static void fsl_imx6_realize(DeviceState *dev, Error **errp)
             { FSL_IMX6_CAN2_ADDR, FSL_IMX6_FLEXCAN2_IRQ },
         };
 
-        s->flexcan[i].ccm = IMX_CCM(&s->ccm);
+        object_property_set_link(OBJECT(&s->flexcan[i]), "clock-control-module",
+                                 OBJECT(&s->ccm), &error_abort);
         object_property_set_link(OBJECT(&s->flexcan[i]), "canbus",
                                  OBJECT(s->canbus[i]), &error_abort);
 
