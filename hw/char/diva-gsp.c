@@ -225,7 +225,18 @@ static void diva_aux_realize(PCIDevice *dev, Error **errp)
 
     pci->dev.config[PCI_CLASS_PROG] = 0x02;
     pci->dev.config[PCI_INTERRUPT_PIN] = 0x01;
-    pci->irq = pci_allocate_irq(&pci->dev);
+
+    /* PCI_INTERRUPT_PIN == 0 is a legal value meaning "device uses no
+     * INTx line" (PCI 3.0 sec 6.2.4) -- real Diva aux functions ship it
+     * (an HP e3000 A400 reads back Interrupt Pin 0 here).  pci_intx()
+     * computes config[PCI_INTERRUPT_PIN] - 1, so an unconditional
+     * pci_allocate_irq() would assert in hw/pci/pci.c at machine
+     * realization for such a device.  Follow the hw/misc/pci-testdev.c
+     * idiom: no pin, no allocation.  qemu_free_irq(NULL) in
+     * diva_aux_exit() is a safe no-op, so no guard is needed there. */
+    if (pci->dev.config[PCI_INTERRUPT_PIN] != 0) {
+        pci->irq = pci_allocate_irq(&pci->dev);
+    }
 
     memory_region_init(&pci->mem, OBJECT(pci), "mem", 16);
     pci_register_bar(&pci->dev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY, &pci->mem);
