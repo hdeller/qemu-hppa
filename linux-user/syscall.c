@@ -4217,7 +4217,16 @@ static inline abi_long do_semtimedop(int semid,
 #endif
 
 #define target_time64_t         abi_ullong
-#define target_swap_time64(x)   tswap64(x)
+/*
+  * On some older 32 bit big-endian architectures (like m68k) the 64-bit time
+  * fields of msqid64_ds is a pair of unsigned long values, where the lower
+  * half is in the wrong place.
+ */
+#ifdef TARGET_M68K
+# define target_swap_time64(x)   (tswap32(x) | (((uint64_t)tswap32((x) >> 32)) << 32))
+#else
+# define target_swap_time64(x)   tswap64(x)
+#endif
 
 struct target_msqid_ds
 {
