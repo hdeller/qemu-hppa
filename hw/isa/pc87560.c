@@ -8,10 +8,10 @@
 #include "hw/core/irq.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/core/qdev-properties-system.h"
-#include "hw/char/serial.h"             
-#include "hw/char/parallel.h"           
-#include "hw/block/fdc-internal.h"   
-#include "hw/isa/pc87560.h"  
+#include "hw/char/serial.h"
+#include "hw/char/parallel.h"
+#include "hw/block/fdc-internal.h"
+#include "hw/isa/pc87560.h"
 
 static uint64_t pc87560_pp_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -76,7 +76,7 @@ static uint64_t pic1_read(void *opaque, hwaddr addr, unsigned size)
                 return 0x00;
             }
             s->pic.isr |= (1 << irq);
-            pic_update_irq(s);       
+            pic_update_irq(s);
             return 0x80 | irq;
         }
         return s->pic.read_isr ? s->pic.isr : s->pic.irr;
@@ -91,10 +91,11 @@ static void pic1_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 
     if (addr == 1) {
         if (s->pic.init_phase > 0) {
-            if (s->pic.init_phase == 3)
+            if (s->pic.init_phase == 3) {
                 s->pic.init_phase = 0;
-            else
+            } else {
                 s->pic.init_phase++;
+            }
         } else {
             s->pic.imr = v;
             pic_update_irq(s);
@@ -108,33 +109,37 @@ static void pic1_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
         s->pic.irr = 0;
         s->pic.isr = 0;
         s->pic.poll_mode = false;
-        s->pic.priority_base = 7; 
+        s->pic.priority_base = 7;
     } else if (v & 0x08) {
-        if (v & 0x04) s->pic.poll_mode = true;
-        if (v & 0x02) s->pic.read_isr = (v & 0x01);
+        if (v & 0x04) {
+            s->pic.poll_mode = true;
+        }
+        if (v & 0x02) {
+            s->pic.read_isr = (v & 0x01);
+        }
     } else {
         uint8_t cmd = (v >> 5) & 0x07;
         uint8_t irq = v & 0x07;
         switch (cmd) {
-        case 1: 
-        case 5: { 
+        case 1:
+        case 5: {
             int serviced = pic_highest_priority(s, s->pic.isr);
             if (serviced != -1) {
                 s->pic.isr &= ~(1 << serviced);
                 if (cmd == 5) {
-                    s->pic.priority_base = serviced;   
+                    s->pic.priority_base = serviced;
                 }
             }
             break;
         }
-        case 3: 
-        case 7: 
+        case 3:
+        case 7:
             s->pic.isr &= ~(1 << irq);
             if (cmd == 7) {
-                s->pic.priority_base = irq;        
+                s->pic.priority_base = irq;
             }
             break;
-        case 6: 
+        case 6:
             s->pic.priority_base = irq;
             break;
         }
@@ -153,10 +158,11 @@ static const MemoryRegionOps pc87560_pic1_ops = {
 static void pc87560_pic_irq_in(void *opaque, int irq_n, int level)
 {
     PC87560SuperioState *s = opaque;
-    if (level)
+    if (level) {
         s->pic.irr |=  (1 << irq_n);
-    else
+    } else {
         s->pic.irr &= ~(1 << irq_n);
+    }
     pic_update_irq(s);
 }
 
@@ -191,9 +197,10 @@ static const MemoryRegionOps pc87560_pp_ops = {
     .valid.max_access_size = 1,
 };
 
-/* 
- Some features on the chip are disabled by default but in case someone reads/writes to those registers use the stub to respond instead of faulting
-*/
+/*
+ * Some features on the chip are disabled by default but in case someone
+ * reads/writes to those registers use the stub to respond instead of faulting
+ */
 static uint64_t pc87560_stub_read(void *opaque, hwaddr addr, unsigned size)
 {
     qemu_log_mask(LOG_UNIMP,
@@ -214,16 +221,17 @@ static const MemoryRegionOps pc87560_stub_ops = {
 };
 
 
-// Is the fdc usable ? 
 static uint64_t pc87560_fdc_read(void *opaque, hwaddr addr, unsigned size)
 {
     return fdctrl_read(opaque, (uint32_t)addr);
 }
+
 static void pc87560_fdc_write(void *opaque, hwaddr addr, uint64_t val,
                               unsigned size)
 {
     fdctrl_write(opaque, (uint32_t)addr, (uint32_t)val);
 }
+
 static const MemoryRegionOps pc87560_fdc_ops = {
     .read  = pc87560_fdc_read,
     .write = pc87560_fdc_write,
@@ -350,9 +358,9 @@ static void pc87560_superio_realize(PCIDevice *pci, Error **errp)
     pci->config[REG_DMA_ROUTE1] = 0x67;
     pci->config[REG_PPDID]      = 0x10;
 
-    pci_set_long(pci->config + REG_KBCBAR,  0x00000060); // not usable 
+    pci_set_long(pci->config + REG_KBCBAR,  0x00000060); // not usable
     pci_set_long(pci->config + REG_ACPIBAR, 0x00004001);
-    pci_set_long(pci->config + REG_PMBAR,   0xFFFFFF01); 
+    pci_set_long(pci->config + REG_PMBAR,   0xFFFFFF01);
     pci_set_long(pci->config + REG_FDCBAR,  0x000003F0); // not usable
     pci_set_long(pci->config + REG_SP1BAR,  0x000003F8);
     pci_set_long(pci->config + REG_SP2BAR,  0x000002F8);
@@ -375,7 +383,7 @@ static void pc87560_superio_realize(PCIDevice *pci, Error **errp)
     memory_region_init_io(&s->pic1_io, OBJECT(s), &pc87560_pic1_ops,
                           s, "pc87560-pic1", 2);
     memory_region_add_subregion(io, IC_PIC1, &s->pic1_io);
-    
+
     s->serial[0].irq = qemu_allocate_irq(pc87560_pic_irq_in, s, 3);
     if (!qdev_realize(DEVICE(&s->serial[0]), NULL, errp)) {
         return;
@@ -399,7 +407,7 @@ static void pc87560_superio_realize(PCIDevice *pci, Error **errp)
                           &s->pp, "pc87560-pp", 8);
     memory_region_add_subregion(io, 0x378, &s->pp_io);
     s->pp_mapped = true;
-    s->pic.irq_level   = -1; 
+    s->pic.irq_level   = -1;
     s->pic.priority_base = 7;
     s->fdc.irq       = qemu_allocate_irq(pc87560_pic_irq_in, s, 6);
     s->fdc.dma_chann = -1;
@@ -466,12 +474,12 @@ static void pc87560_superio_class_init(ObjectClass *oc, const void *data)
     k->device_id     = 0x000E;
     k->class_id      = 0x0680;
     k->revision      = 0x01;
-    k->subsystem_vendor_id = 0x103C; // specific for hp idk maybe it helps 
-    k->subsystem_id     = 0x10A7; 
+    k->subsystem_vendor_id = PCI_VENDOR_ID_HP;
+    k->subsystem_id     = 0x10A7;
 
     dc->desc           = "NS PC87560 SuperI/O Function 1 (I/O Peripherals)";
     dc->vmsd           = &vmstate_pc87560_superio;
-    dc->user_creatable = true;
+    dc->user_creatable = false;
     device_class_set_props(dc, pc87560_superio_properties);
     set_bit(DEVICE_CATEGORY_BRIDGE, dc->categories);
 }

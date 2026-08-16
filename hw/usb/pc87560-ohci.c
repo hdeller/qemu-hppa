@@ -16,7 +16,7 @@
 OBJECT_DECLARE_SIMPLE_TYPE(OHCIPCIState, NSC_PCI_OHCI)
 
 struct OHCIPCIState {
-    
+
     PCIDevice parent_obj;
     OHCIState state;
     MemoryRegion nsc_bar;
@@ -38,8 +38,9 @@ static void pc87560_usb_irq_relay(void *opaque, int n, int level)
 }
 
 
-// TODO look at the datasheet and write nsc code
-static void nsc_usb_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+/* TODO look at the datasheet and write nsc code */
+static void nsc_usb_write(void *opaque, hwaddr addr, uint64_t val,
+                          unsigned size)
 {
 }
 
@@ -77,14 +78,14 @@ static void usb_ohci_realize_pci(PCIDevice *dev, Error **errp)
 {
     Error *err = NULL;
     OHCIPCIState *ohci = NSC_PCI_OHCI(dev);
-    
+
     dev->config[PCI_CLASS_PROG]    = 0x10;
     dev->wmask[PCI_CLASS_PROG]     = 0xff;
-    dev->config[PCI_INTERRUPT_PIN] = 0x01; 
-   
+    dev->config[PCI_INTERRUPT_PIN] = 0x01;
+
     qdev_init_gpio_out(DEVICE(dev), ohci->irq_out, 1);
-    ohci->state.irq = qemu_allocate_irq(pc87560_usb_irq_relay, ohci, 0);    
-    
+    ohci->state.irq = qemu_allocate_irq(pc87560_usb_irq_relay, ohci, 0);
+
     usb_ohci_init(&ohci->state, DEVICE(dev), ohci->num_ports, 0,
                   ohci->masterbus, ohci->firstport,
                   pci_get_address_space(dev), ohci_pci_die, &err);
@@ -169,7 +170,7 @@ static void ohci_pci_class_init(ObjectClass *klass, const void *data)
     dc->desc         = "National Semiconductor USB Controller";
     device_class_set_props(dc, ohci_pci_properties);
     dc->hotpluggable = false;
-    dc->user_creatable = true;
+    dc->user_creatable = false;
     dc->vmsd         = &vmstate_ohci;
     device_class_set_legacy_reset(dc, usb_ohci_reset_pci);
 }
