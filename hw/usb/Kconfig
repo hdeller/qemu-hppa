@@ -146,7 +146,3 @@ config XLNX_USB_SUBSYS
 config USB_CHIPIDEA
     bool
     select USB_EHCI_SYSBUS
-    
-config PC87560
-    bool
-
