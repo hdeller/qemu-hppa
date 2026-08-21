@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * NS PC87560 SuperI/O — IDE emulation
+ *
+ * Copyright (c) 2026 Abizer abizerlokhandwalastd10@gmail.com
+ */
+
 #include "qemu/osdep.h"
 #include "hw/pci/pci.h"
 #include "migration/vmstate.h"
@@ -8,10 +15,10 @@
 #include "ide-internal.h"
 #include "trace.h"
 
-#define PC87415_IDE_CHANNELS       2
+#define PC87415_IDE_CHANNELS        2
 
 /* PCI configuration space */
-#define PC87415_CTRL               0x40
+#define PC87415_CTRL                0x40
 #define PC87415_WRITE_BUFFER_STATUS 0x43
 
 /* CTRL register, byte 1 (PCI config offset 0x41) */
@@ -110,11 +117,10 @@ static void bmdma_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 
     switch (addr & 3) {
     case 0: {
-    /*
-     * NS87415 erratum: writing the command register also clears
-     * the error and interrupt status bits.
-     */
-
+        /*
+         * NS87415 erratum: writing the command register also clears
+         * the error and interrupt status bits.
+         */
         uint8_t status_clear = val & (PC87415_BMDMA_STATUS_INT |
                                       PC87415_BMDMA_STATUS_ERROR);
         uint8_t real_cmd = val & PC87415_BMDMA_CMD_MASK;
@@ -307,7 +313,7 @@ static void pci_pc87560_ide_realize(PCIDevice *dev, Error **errp)
 static void pci_pc87560_ide_exitfn(PCIDevice *dev)
 {
     PCIIDEState *d = PCI_IDE(dev);
-    unsigned i;
+    unsigned int i;
 
     for (i = 0; i < 2; ++i) {
         memory_region_del_subregion(&d->bmdma_bar, &d->bmdma[i].extra_io);
@@ -327,8 +333,8 @@ static void pc87560_ide_class_init(ObjectClass *klass, const void *data)
     dc->user_creatable = false;
     k->realize = pci_pc87560_ide_realize;
     k->exit = pci_pc87560_ide_exitfn;
-    k->vendor_id = 0x100B;
-    k->device_id = 0x0002;
+    k->vendor_id = PCI_VENDOR_ID_NS;
+    k->device_id = PCI_DEVICE_ID_NS_87415;
     k->revision = 0x02;
     k->subsystem_vendor_id = PCI_VENDOR_ID_HP;
     k->subsystem_id     = 0x10A7;

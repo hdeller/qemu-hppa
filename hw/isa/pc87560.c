@@ -194,8 +194,8 @@ static void pc87560_pp_write(void *opaque, hwaddr addr, uint64_t val,
         }
         break;
     default:
-        qemu_log_mask(LOG_UNIMP
-            , "pc87560-pp: write offset 0x%" HWADDR_PRIx "\n", addr);
+        qemu_log_mask(LOG_UNIMP,
+            "pc87560-pp: write offset 0x%" HWADDR_PRIx "\n", addr);
     }
 }
 static const MemoryRegionOps pc87560_pp_ops = {
@@ -480,8 +480,8 @@ static void pc87560_superio_class_init(ObjectClass *oc, const void *data)
 
     k->realize       = pc87560_superio_realize;
     k->config_write  = pc87560_superio_config_write;
-    k->vendor_id     = 0x100B;
-    k->device_id     = 0x000E;
+    k->vendor_id     = PCI_VENDOR_ID_NS;
+    k->device_id     = PCI_DEVICE_ID_NS_87560_LIO;
     k->class_id      = 0x0680;
     k->revision      = 0x01;
     k->subsystem_vendor_id = PCI_VENDOR_ID_HP;

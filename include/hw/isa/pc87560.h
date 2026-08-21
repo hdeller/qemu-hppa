@@ -1,5 +1,6 @@
 #ifndef HW_ISA_PC87560_H
 #define HW_ISA_PC87560_H
+
 #define TYPE_PC87560_Superio  "pc87560-superio"
 OBJECT_DECLARE_SIMPLE_TYPE(PC87560SuperioState, PC87560_Superio)
 
@@ -32,7 +33,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(PC87560SuperioState, PC87560_Superio)
 #define REG_SIRQ_EN     0x7C
 #define REG_RSVD_CFG    0x7E
 #define REG_AUDIOCS_EN  0x7F
-#define REG_FXMEM_CTL1 0x80
+#define REG_FXMEM_CTL1  0x80
 #define REG_KBCBAR      0x84
 #define REG_ACPIBAR     0x88
 #define REG_PMBAR       0x8C

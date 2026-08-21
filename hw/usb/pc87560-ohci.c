@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * NS PC87560 SuperI/O — USB OHCI emulation
+ *
+ * Copyright (c) 2026 Abizer abizerlokhandwalastd10@gmail.com
+ */
+
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/timer.h"
@@ -159,11 +166,11 @@ static void ohci_pci_class_init(ObjectClass *klass, const void *data)
     k->exit          = usb_ohci_exit;
     k->config_read   = pc87560_ohci_config_read;
     k->config_write  = pc87560_ohci_config_write;
-    k->vendor_id     = 0x100b;
-    k->device_id     = 0x0012;
+    k->vendor_id     = PCI_VENDOR_ID_NS;
+    k->device_id     = PCI_DEVICE_ID_NS_87560_USB;
     k->revision      = 0x01;
     k->class_id      = PCI_CLASS_SERIAL_USB;
-    k->subsystem_vendor_id = 0x103C;
+    k->subsystem_vendor_id = PCI_VENDOR_ID_HP;
     k->subsystem_id        = 0x10A7;
 
     set_bit(DEVICE_CATEGORY_USB, dc->categories);
