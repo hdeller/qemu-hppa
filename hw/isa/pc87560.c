@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * NS PC87560 SuperI/O — ISA emulation
+ *
+ * Copyright (c) 2026 Abizer abizerlokhandwalastd10@gmail.com
+ */
 #include "qemu/osdep.h"
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_device.h"
@@ -27,11 +33,11 @@ static uint64_t pc87560_pp_read(void *opaque, hwaddr addr, unsigned size)
     }
 }
 
-static int pic_highest_priority(PC87560SuperioState *s, uint8_t mask)
+static int pic_highest_priority(int priority_base, uint8_t mask)
 {
     int i;
     for (i = 1; i <= 8; i++) {
-        int irq = (s->pic.priority_base + i) & 7;
+        int irq = (priority_base + i) & 7;
         if (mask & (1 << irq)) {
             return irq;
         }
@@ -41,8 +47,9 @@ static int pic_highest_priority(PC87560SuperioState *s, uint8_t mask)
 
 static void pic_update_irq(PC87560SuperioState *s)
 {
-    int first_irr = pic_highest_priority(s, s->pic.irr & ~s->pic.imr);
-    int first_isr = pic_highest_priority(s, s->pic.isr);
+    int base = s->pic.priority_base;
+    int first_irr = pic_highest_priority(base, s->pic.irr & ~s->pic.imr);
+    int first_isr = pic_highest_priority(base, s->pic.isr);
     int pending = 0;
 
     if (first_irr != -1) {
@@ -70,7 +77,7 @@ static uint64_t pic1_read(void *opaque, hwaddr addr, unsigned size)
         if (s->pic.poll_mode) {
             s->pic.poll_mode = false;
             uint8_t pending_mask = s->pic.irr & ~s->pic.imr;
-            int irq = pic_highest_priority(s, pending_mask);
+            int irq = pic_highest_priority(s->pic.priority_base, pending_mask);
             if (irq == -1) {
                 pic_update_irq(s);
                 return 0x00;
@@ -123,7 +130,8 @@ static void pic1_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
         switch (cmd) {
         case 1:
         case 5: {
-            int serviced = pic_highest_priority(s, s->pic.isr);
+            int serviced = pic_highest_priority(s->pic.priority_base,
+                                                 s->pic.isr);
             if (serviced != -1) {
                 s->pic.isr &= ~(1 << serviced);
                 if (cmd == 5) {
@@ -186,7 +194,8 @@ static void pc87560_pp_write(void *opaque, hwaddr addr, uint64_t val,
         }
         break;
     default:
-        qemu_log_mask(LOG_UNIMP, "pc87560-pp: write offset 0x%" HWADDR_PRIx "\n", addr);
+        qemu_log_mask(LOG_UNIMP
+            , "pc87560-pp: write offset 0x%" HWADDR_PRIx "\n", addr);
     }
 }
 static const MemoryRegionOps pc87560_pp_ops = {
@@ -198,8 +207,9 @@ static const MemoryRegionOps pc87560_pp_ops = {
 };
 
 /*
- * Some features on the chip are disabled by default but in case someone
- * reads/writes to those registers use the stub to respond instead of faulting
+ * Some features on the chip are disabled by default. If a guest
+ * reads or writes one of those registers, respond via this stub
+ * instead of faulting.
  */
 static uint64_t pc87560_stub_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -358,19 +368,19 @@ static void pc87560_superio_realize(PCIDevice *pci, Error **errp)
     pci->config[REG_DMA_ROUTE1] = 0x67;
     pci->config[REG_PPDID]      = 0x10;
 
-    pci_set_long(pci->config + REG_KBCBAR,  0x00000060); // not usable
+    pci_set_long(pci->config + REG_KBCBAR,  0x00000060); /* not usable */
     pci_set_long(pci->config + REG_ACPIBAR, 0x00004001);
     pci_set_long(pci->config + REG_PMBAR,   0xFFFFFF01);
-    pci_set_long(pci->config + REG_FDCBAR,  0x000003F0); // not usable
+    pci_set_long(pci->config + REG_FDCBAR,  0x000003F0); /* not usable */
     pci_set_long(pci->config + REG_SP1BAR,  0x000003F8);
     pci_set_long(pci->config + REG_SP2BAR,  0x000002F8);
     pci_set_long(pci->config + REG_PPBAR,   0x00000378);
 
 
-    pci_set_long(pci->wmask + REG_KBCBAR,  0xFFFFFFF8); // not usable
+    pci_set_long(pci->wmask + REG_KBCBAR,  0xFFFFFFF8); /* not usable */
     pci_set_long(pci->wmask + REG_ACPIBAR, 0xFFFFFFE1);
     pci_set_long(pci->wmask + REG_PMBAR,   0xFFFFFF01);
-    pci_set_long(pci->wmask + REG_FDCBAR,  0xFFFFFFF8); // not usable
+    pci_set_long(pci->wmask + REG_FDCBAR,  0xFFFFFFF8); /* not usable */
     pci_set_long(pci->wmask + REG_SP1BAR,  0xFFFFFFF8);
     pci_set_long(pci->wmask + REG_SP2BAR,  0xFFFFFFF8);
     pci_set_long(pci->wmask + REG_PPBAR,   0xFFFFFFF8);

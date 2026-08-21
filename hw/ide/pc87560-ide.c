@@ -8,40 +8,70 @@
 #include "ide-internal.h"
 #include "trace.h"
 
-#define PC87560_IDE_DEBUG 1
+#define PC87415_IDE_CHANNELS       2
 
-#define DPRINTF(fmt, ...) \
-    do { \
-        if (PC87560_IDE_DEBUG) { \
-            fprintf(stderr, fmt, ## __VA_ARGS__); \
-        } \
-    } while (0)
+/* PCI configuration space */
+#define PC87415_CTRL               0x40
+#define PC87415_WRITE_BUFFER_STATUS 0x43
 
-#define IDE_CFR1 0x40
-#define IDE_CFR2 0x41
-#define IDE_CFR3 0x42
-#define IDE_WBS  0x43
+/* CTRL register, byte 1 (PCI config offset 0x41) */
+#define PC87415_CTRL_CH1_INT_MASK  BIT(0)
+#define PC87415_CTRL_CH2_INT_MASK  BIT(1)
 
+/* PCI programming interface */
+#define PC87415_PIF_CH1_PROGRAMMABLE  BIT(1)
+#define PC87415_PIF_CH2_PROGRAMMABLE  BIT(3)
+#define PC87415_PIF_MASTER_IDE        BIT(7)
 
-/* PC87560 Bus Master IDE Command Register bits (BAR4 offset 0x00/0x08) */
-#define PC87560_BM_CMD_START        0x01  /* bit 0: start/stop DMA */
-#define PC87560_BM_CMD_WRITE        0x08  /* bit 3: 1=write to disk, 0=read from disk */
+#define PC87415_PIF_DEFAULT \
+    (PC87415_PIF_CH1_PROGRAMMABLE | \
+     PC87415_PIF_CH2_PROGRAMMABLE | \
+     PC87415_PIF_MASTER_IDE)
 
-/* PC87560 Bus Master IDE Status Register bits (BAR4 offset 0x02/0x0A) */
-#define PC87560_BM_SR_ACTIVE        0x01  /* bit 0: DMA active, read-only */
-#define PC87560_BM_SR_ERROR         0x02  /* bit 1: error, W1C */
-#define PC87560_BM_SR_INT           0x04  /* bit 2: interrupt, W1C */
-#define PC87560_BM_SR_DRV1_DMA      0x20  /* bit 5: drive 1 DMA capable */
-#define PC87560_BM_SR_DRV2_DMA      0x40  /* bit 6: drive 2 DMA capable */
+/* Per-device timing registers */
+#define PC87415_CH1_DEV1_READ_TIMING   0x44
+#define PC87415_CH1_DEV1_WRITE_TIMING  0x45
+#define PC87415_CH1_DEV2_READ_TIMING   0x48
+#define PC87415_CH1_DEV2_WRITE_TIMING  0x49
+#define PC87415_CH2_DEV1_READ_TIMING   0x4c
+#define PC87415_CH2_DEV1_WRITE_TIMING  0x4d
+#define PC87415_CH2_DEV2_READ_TIMING   0x50
+#define PC87415_CH2_DEV2_WRITE_TIMING  0x51
 
-#define CFR_INTR_CH1    0x01
-#define CFR_INTR_CH2    0x02
+#define PC87415_CMD_TIMING             0x54
+#define PC87415_SECTOR_SIZE            0x55
 
-#define ATA_DMA_START   0x01
-#define ATA_DMA_ERR     0x02
-#define ATA_DMA_INTR    0x04
-#define ATA_DMA_WR      0x08
-#define ATA_DMA_ACTIVE  0x01
+/* PCI BARs */
+#define PC87415_BAR_CH1_DATA           0
+#define PC87415_BAR_CH1_CONTROL        1
+#define PC87415_BAR_CH2_DATA           2
+#define PC87415_BAR_CH2_CONTROL        3
+#define PC87415_BAR_BMDMA              4
+
+/* Bus-master IDE registers */
+#define PC87415_BMDMA_CMD              0x00
+#define PC87415_BMDMA_STATUS           0x02
+#define PC87415_BMDMA_PRD              0x04
+#define PC87415_BMDMA_CHANNEL_SIZE     0x08
+#define PC87415_BMDMA_BAR_SIZE         0x10
+
+/*
+ * Bus-master command register:
+ * bit 0 = start/stop
+ * bit 3 = read/write
+ */
+#define PC87415_BMDMA_CMD_START        BIT(0)
+#define PC87415_BMDMA_CMD_WRITE        BIT(3)
+#define PC87415_BMDMA_CMD_MASK \
+    (PC87415_BMDMA_CMD_START | PC87415_BMDMA_CMD_WRITE)
+
+/*
+ * Bus-master status register:
+ * bit 1 = error
+ * bit 2 = interrupt
+ */
+#define PC87415_BMDMA_STATUS_ERROR     BIT(1)
+#define PC87415_BMDMA_STATUS_INT       BIT(2)
 
 static qemu_irq pc87560_ide_irq_out;
 static void pc87560_update_irq(PCIDevice *pd);
@@ -80,8 +110,15 @@ static void bmdma_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 
     switch (addr & 3) {
     case 0: {
-        uint8_t status_clear = val & (ATA_DMA_INTR | ATA_DMA_ERR);
-        uint8_t real_cmd = val & 0x09;  /* only START(0) and WRITE(3) are real cmd bits */
+    /*
+     * NS87415 erratum: writing the command register also clears
+     * the error and interrupt status bits.
+     */
+
+        uint8_t status_clear = val & (PC87415_BMDMA_STATUS_INT |
+                                      PC87415_BMDMA_STATUS_ERROR);
+        uint8_t real_cmd = val & PC87415_BMDMA_CMD_MASK;
+        /* only START(0) and WRITE(3) are real cmd bits */
 
         bm->status &= ~status_clear;
 
@@ -104,18 +141,19 @@ static void bmdma_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
 static void pc87560_update_irq(PCIDevice *pd)
 {
     PCIIDEState *d = PCI_IDE(pd);
-    uint8_t cntrl2 = pd->config[IDE_CFR2];
+    uint8_t ctrl1 = pd->config[PC87415_CTRL + 1];
     int level = 0;
 
-    if (!(cntrl2 & CFR_INTR_CH1)) {
+    if (!(ctrl1 & PC87415_CTRL_CH1_INT_MASK)) {
         level |= !!(d->bmdma[0].status & BM_STATUS_INT);
     }
-    if (!(cntrl2 & CFR_INTR_CH2)) {
+
+    if (!(ctrl1 & PC87415_CTRL_CH2_INT_MASK)) {
         level |= !!(d->bmdma[1].status & BM_STATUS_INT);
     }
+
     qemu_set_irq(pc87560_ide_irq_out, level);
 }
-
 
 static const MemoryRegionOps pc87560_bmdma_ops = {
     .read = bmdma_read,
@@ -125,19 +163,30 @@ static const MemoryRegionOps pc87560_bmdma_ops = {
 
 static void bmdma_setup_bar(PCIIDEState *d)
 {
-    BMDMAState *bm;
-    int i;
+    unsigned int i;
 
-    memory_region_init(&d->bmdma_bar, OBJECT(d), "pc87560-bmdma", 16);
-    for (i = 0; i < 2; i++) {
-        bm = &d->bmdma[i];
-        memory_region_init_io(&bm->extra_io, OBJECT(d), &pc87560_bmdma_ops, bm,
-                              "pc87560-bmdma-bus", 4);
-        memory_region_add_subregion(&d->bmdma_bar, i * 8, &bm->extra_io);
+    memory_region_init(&d->bmdma_bar, OBJECT(d), "pc87415-bmdma",
+                       PC87415_BMDMA_BAR_SIZE);
+
+    for (i = 0; i < PC87415_IDE_CHANNELS; i++) {
+        BMDMAState *bm = &d->bmdma[i];
+
+        memory_region_init_io(&bm->extra_io, OBJECT(d),
+                              &pc87560_bmdma_ops, bm,
+                              "pc87415-bmdma-cmd-status",
+                              4);
+        memory_region_add_subregion(&d->bmdma_bar,
+                                    i * PC87415_BMDMA_CHANNEL_SIZE,
+                                    &bm->extra_io);
+
         memory_region_init_io(&bm->addr_ioport, OBJECT(d),
                               &bmdma_addr_ioport_ops, bm,
-                              "pc87560-bmdma-ioport", 4);
-        memory_region_add_subregion(&d->bmdma_bar, i * 8 + 4, &bm->addr_ioport);
+                              "pc87415-bmdma-prd",
+                              4);
+        memory_region_add_subregion(&d->bmdma_bar,
+                                    i * PC87415_BMDMA_CHANNEL_SIZE +
+                                    PC87415_BMDMA_PRD,
+                                    &bm->addr_ioport);
     }
 }
 
@@ -166,17 +215,12 @@ static void pc87560_reset(Object *dev, ResetType type)
 
 
 static void pc87560_pci_config_write(PCIDevice *d, uint32_t addr, uint32_t val,
-                                    int l)
+                                    int len)
 {
-    uint32_t i;
-    pci_default_write_config(d, addr, val, l);
+    pci_default_write_config(d, addr, val, len);
 
-    for (i = addr; i < addr + l; i++) {
-        switch (i) {
-        case IDE_CFR2:
-            pc87560_update_irq(d);
-            break;
-        }
+    if (ranges_overlap(addr, len, PC87415_CTRL + 1, 1)) {
+        pc87560_update_irq(d);
     }
 }
 
@@ -197,32 +241,38 @@ static void pci_pc87560_ide_realize(PCIDevice *dev, Error **errp)
     pci_conf[PCI_INTERRUPT_PIN] = 0x01;
     qdev_init_gpio_out(ds, &pc87560_ide_irq_out, 1);
 
-    // TODO make all of this with defines instead of values and confirm they are correct
-    memset(&dev->wmask[IDE_CFR1], 0xff, 3);
-    dev->wmask[IDE_WBS] = 0xff;
+    memset(&dev->wmask[PC87415_CTRL], 0xff, 3);
 
-    // 0x44 to 0x55 are read/write timing configuration registers
-    for (i = 0x44; i <= 0x55; i++) {
-        dev->wmask[i] = 0xff;
-    }
-    // 0x58 to 0x5D are Read-Only values
-    for (i = 0x58; i <= 0x5d; i++) {
-        dev->wmask[i] = 0x00;
-    }
+    dev->wmask[PC87415_CH1_DEV1_READ_TIMING] = 0xff;
+    dev->wmask[PC87415_CH1_DEV1_WRITE_TIMING] = 0xff;
 
-    pci_conf[IDE_CFR1] = 0x00;
-    pci_conf[IDE_CFR2] = 0x00;
-    pci_conf[IDE_CFR3] = 0x00;
-    pci_conf[IDE_WBS]  = 0x60;
+    dev->wmask[PC87415_CH1_DEV2_READ_TIMING] = 0xff;
+    dev->wmask[PC87415_CH1_DEV2_WRITE_TIMING] = 0xff;
 
-    for (i = 0x44; i <= 0x51; i++) {
-        if (i != 0x46 && i != 0x47 &&
-                i != 0x4A && i != 0x4B && i != 0x4E && i != 0x4F) {
-            pci_conf[i] = 0x85;
-        }
-    }
-    pci_conf[0x54] = 0xB7;
-    pci_conf[0x55] = 0xEE;
+    dev->wmask[PC87415_CH2_DEV1_READ_TIMING] = 0xff;
+    dev->wmask[PC87415_CH2_DEV1_WRITE_TIMING] = 0xff;
+
+    dev->wmask[PC87415_CH2_DEV2_READ_TIMING] = 0xff;
+    dev->wmask[PC87415_CH2_DEV2_WRITE_TIMING] = 0xff;
+
+    dev->wmask[PC87415_CMD_TIMING] = 0xff;
+    dev->wmask[PC87415_SECTOR_SIZE] = 0xff;
+
+    pci_conf[PC87415_CTRL + 0] = 0x00;
+    pci_conf[PC87415_CTRL + 1] = 0x00;
+    pci_conf[PC87415_CTRL + 2] = 0x00;
+
+    pci_conf[PC87415_CH1_DEV1_READ_TIMING]  = 0x85;
+    pci_conf[PC87415_CH1_DEV1_WRITE_TIMING] = 0x85;
+    pci_conf[PC87415_CH1_DEV2_READ_TIMING]  = 0x85;
+    pci_conf[PC87415_CH1_DEV2_WRITE_TIMING] = 0x85;
+    pci_conf[PC87415_CH2_DEV1_READ_TIMING]  = 0x85;
+    pci_conf[PC87415_CH2_DEV1_WRITE_TIMING] = 0x85;
+    pci_conf[PC87415_CH2_DEV2_READ_TIMING]  = 0x85;
+    pci_conf[PC87415_CH2_DEV2_WRITE_TIMING] = 0x85;
+
+    pci_conf[PC87415_CMD_TIMING] = 0xB7;
+    pci_conf[PC87415_SECTOR_SIZE] = 0xEE;
 
     memory_region_init_io(&d->data_bar[0], OBJECT(d), &pci_ide_data_le_ops,
                           &d->bus[0], "pc87560-data0", 8);
