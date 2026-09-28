@@ -21,6 +21,7 @@
 #include "qemu/bitops.h"
 #include "qemu/bswap.h"
 #include "qemu/cutils.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "qemu/units.h"
 #include "hw/scsi/scsi.h"
@@ -88,6 +89,17 @@ struct SCSITapeState {
 
     /* A medium is present and the drive is loaded. */
     bool loaded;
+    /* PREVENT ALLOW MEDIUM REMOVAL state. */
+    bool removal_prevented;
+    /*
+     * The guest unloaded while removal was prevented: the cartridge was
+     * kept in the drive and rewound, and medium-access commands report
+     * NOT READY until a LOAD, a medium change or a reset.  With
+     * "autoload-after-unload" only TEST UNIT READY does, and the next
+     * medium access loads the tape again.
+     */
+    bool unload_hold;
+    bool autoload_after_unload;
 
     /* Mode parameters that MODE SELECT can change. */
     uint8_t dev_cfg_flags;      /* device configuration page, byte 8 */
@@ -1090,6 +1102,124 @@ static int scsi_tape_emulate_log_sense(SCSITapeReq *r, uint8_t *outbuf)
     return p - outbuf;
 }
 
+/*
+ * Removable medium.  A tape drive has no tray apart from its medium, so
+ * the tray is reported open exactly when no medium is loaded.  This is
+ * the only place where s->loaded changes.
+ */
+static bool scsi_tape_set_medium(SCSITapeState *s, bool load, Error **errp)
+{
+    BlockBackend *blk = s->qdev.conf.blk;
+
+    s->unload_hold = false;
+    if (load) {
+        if (!blkconf_apply_backend_options(&s->qdev.conf,
+                                           !blk_supports_write_perm(blk),
+                                           false, errp)) {
+            return false;
+        }
+        scsi_tape_rewind(s);
+        s->loaded = true;
+        scsi_tape_note_mount(s);
+    } else {
+        s->loaded = false;
+        scsi_tape_rewind(s);
+        /* Hold no permissions while empty; the next image may be read-only */
+        blk_set_perm(blk, 0, BLK_PERM_ALL, &error_abort);
+        s->can_resize = false;
+    }
+    return true;
+}
+
+static void scsi_tape_change_media_cb(void *opaque, bool load, Error **errp)
+{
+    SCSITapeState *s = opaque;
+
+    if (!scsi_tape_set_medium(s, load, errp)) {
+        return;
+    }
+    scsi_device_set_ua(&s->qdev, load ? SENSE_CODE(MEDIUM_CHANGED)
+                                      : SENSE_CODE(UNIT_ATTENTION_NO_MEDIUM));
+}
+
+static void scsi_tape_eject_request_cb(void *opaque, bool force)
+{
+    SCSITapeState *s = opaque;
+
+    if (force) {
+        s->removal_prevented = false;
+    }
+}
+
+static bool scsi_tape_is_tray_open(void *opaque)
+{
+    SCSITapeState *s = opaque;
+
+    return !s->loaded;
+}
+
+/*
+ * There is no is_medium_locked callback: PREVENT MEDIUM REMOVAL binds the
+ * guest's own UNLOAD, but the host can always eject or change the medium.
+ * Hosts commonly keep removal prevented for as long as a volume is in
+ * use, and the operator must still be able to take the tape out.
+ */
+static const BlockDevOps scsi_tape_block_ops = {
+    .change_media_cb  = scsi_tape_change_media_cb,
+    .eject_request_cb = scsi_tape_eject_request_cb,
+    .is_tray_open     = scsi_tape_is_tray_open,
+};
+
+static void scsi_tape_load_unload(SCSITapeReq *r, uint8_t *cdb)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    BlockBackend *blk = s->qdev.conf.blk;
+    bool load = cdb[4] & 0x01;
+    bool eot = cdb[4] & 0x04;
+
+    if (load && eot) {
+        scsi_tape_check_condition(r, SENSE_CODE(INVALID_FIELD));
+        return;
+    }
+
+    if (load) {
+        if (!blk_is_inserted(blk)) {
+            scsi_tape_check_condition(r, SENSE_CODE(NO_MEDIUM));
+            return;
+        }
+        if (s->loaded) {
+            scsi_tape_rewind(s);
+            s->unload_hold = false;
+        } else if (!scsi_tape_set_medium(s, true, NULL)) {
+            scsi_tape_check_condition(r, SENSE_CODE(NO_MEDIUM));
+        }
+        return;
+    }
+
+    if (s->removal_prevented) {
+        /*
+         * UNLOAD while removal is prevented: the tape is rewound but
+         * stays in the drive, and medium-access commands report NOT
+         * READY until it is loaded again (SCSI-2 10.2.2).  With
+         * "autoload-after-unload" the unload also ends the prevent
+         * state, and the next medium-access command loads the tape again
+         * (see scsi_tape_send_command()).
+         */
+        scsi_tape_rewind(s);
+        if (s->autoload_after_unload) {
+            s->removal_prevented = false;
+        }
+        s->unload_hold = s->loaded;
+        return;
+    }
+
+    if (s->loaded) {
+        scsi_tape_set_medium(s, false, NULL);
+    }
+    /* Report the tray as opened; the image stays attached to the drive. */
+    blk_eject(blk, true);
+}
+
 static int scsi_tape_emulate_inquiry(SCSITapeReq *r, uint8_t *outbuf)
 {
     SCSITapeState *s = SCSI_TAPE(r->req.dev);
@@ -1143,6 +1273,24 @@ static bool scsi_tape_cmd_needs_no_medium(uint8_t opcode)
     case MODE_SENSE_10:
     case MODE_SELECT:
     case MODE_SELECT_10:
+    case ALLOW_MEDIUM_REMOVAL:
+    case LOAD_UNLOAD:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* With "autoload-after-unload": the commands that load a kept tape again */
+static bool scsi_tape_cmd_ends_unload_hold(uint8_t opcode)
+{
+    switch (opcode) {
+    case REWIND:
+    case SPACE:
+    case READ_6:
+    case WRITE_6:
+    case WRITE_FILEMARKS:
+    case ERASE:
         return true;
     default:
         return false;
@@ -1170,6 +1318,20 @@ static int32_t scsi_tape_send_command(SCSIRequest *req, uint8_t *buf)
     if (!s->loaded && !scsi_tape_cmd_needs_no_medium(buf[0])) {
         scsi_tape_check_condition(r, SENSE_CODE(NO_MEDIUM));
         return 0;
+    }
+
+    if (s->unload_hold) {
+        if (!s->autoload_after_unload) {
+            if (!scsi_tape_cmd_needs_no_medium(buf[0])) {
+                scsi_tape_check_condition(r, SENSE_CODE(NO_MEDIUM));
+                return 0;
+            }
+        } else if (buf[0] == TEST_UNIT_READY) {
+            scsi_tape_check_condition(r, SENSE_CODE(NO_MEDIUM));
+            return 0;
+        } else if (scsi_tape_cmd_ends_unload_hold(buf[0])) {
+            s->unload_hold = false;
+        }
     }
 
     switch (buf[0]) {
@@ -1247,6 +1409,14 @@ static int32_t scsi_tape_send_command(SCSIRequest *req, uint8_t *buf)
 
     case LOG_SENSE:
         buflen = scsi_tape_emulate_log_sense(r, outbuf);
+        break;
+
+    case LOAD_UNLOAD:
+        scsi_tape_load_unload(r, buf);
+        break;
+
+    case ALLOW_MEDIUM_REMOVAL:
+        s->removal_prevented = buf[4] & 0x01;
         break;
 
     default:
@@ -1344,12 +1514,20 @@ static void scsi_tape_realize(SCSIDevice *dev, Error **errp)
 {
     SCSITapeState *s = SCSI_TAPE(dev);
     bool read_only;
+    int ret;
 
     if (!s->qdev.conf.blk) {
-        error_setg(errp, "drive property not set");
-        return;
+        /*
+         * An empty drive.  Note that an anonymous BlockBackend cannot be
+         * named in the monitor's "change" and "eject" commands; for that,
+         * use an empty named drive (-drive if=none,id=...) instead.
+         */
+        s->qdev.conf.blk = blk_new(qemu_get_aio_context(), 0, BLK_PERM_ALL);
+        ret = blk_attach_dev(s->qdev.conf.blk, &dev->qdev);
+        assert(ret == 0);
     }
 
+    /* An empty drive takes no write permission, so any image fits later. */
     read_only = !blk_is_inserted(s->qdev.conf.blk) ||
                 !blk_supports_write_perm(s->qdev.conf.blk);
     if (!blkconf_apply_backend_options(&s->qdev.conf, read_only, false,
@@ -1374,13 +1552,40 @@ static void scsi_tape_realize(SCSIDevice *dev, Error **errp)
     s->qdev.blocksize = s->block_size;
     scsi_tape_rewind(s);
     s->loaded = blk_is_inserted(s->qdev.conf.blk);
+    s->removal_prevented = false;
+    s->unload_hold = false;
 
-    /* Power-on mode parameters: rewind on reset, EOD defined, no DCE. */
+    /*
+     * Power-on mode parameters: REW set; EOD defined 001, EEG and SEW
+     * set; DCLZ selected but compression (DCE) off; buffered mode.
+     */
     s->dev_cfg_flags = 0x01;
     s->dev_cfg_eod_flags = 0x38;
     s->dev_cfg_sel_comp = 0x01;
     s->compression = false;
     s->buffered_mode = true;
+
+    /* Last, so that is_tray_open never sees a half-initialized device. */
+    blk_set_dev_ops(s->qdev.conf.blk, &scsi_tape_block_ops, s);
+}
+
+/*
+ * Reset (including a SCSI bus reset from the HBA): a loaded tape goes
+ * back to BOP, the prevent state is cleared and the next command gets
+ * UNIT ATTENTION, SCSI BUS RESET OCCURRED.  A tape that an UNLOAD kept
+ * in the drive is ready again as well; SCSI-2 names only a load or a
+ * new volume for that, so this goes beyond the standard.
+ */
+static void scsi_tape_reset(DeviceState *dev)
+{
+    SCSITapeState *s = SCSI_TAPE(dev);
+
+    scsi_device_purge_requests(&s->qdev, SENSE_CODE(SCSI_BUS_RESET));
+    if (s->loaded) {
+        scsi_tape_rewind(s);
+    }
+    s->removal_prevented = false;
+    s->unload_hold = false;
 }
 
 static int scsi_tape_post_load(void *opaque, int version_id)
@@ -1401,6 +1606,8 @@ static const VMStateDescription vmstate_scsi_tape = {
         VMSTATE_UINT64(pos, SCSITapeState),
         VMSTATE_UINT32(rec_consumed, SCSITapeState),
         VMSTATE_BOOL(loaded, SCSITapeState),
+        VMSTATE_BOOL(removal_prevented, SCSITapeState),
+        VMSTATE_BOOL(unload_hold, SCSITapeState),
         VMSTATE_UINT32(block_size, SCSITapeState),
         VMSTATE_UINT8(dev_cfg_flags, SCSITapeState),
         VMSTATE_UINT8(dev_cfg_eod_flags, SCSITapeState),
@@ -1423,6 +1630,8 @@ static const Property scsi_tape_properties[] = {
     DEFINE_PROP_BOOL("eom-at-eod", SCSITapeState, eom_at_eod, false),
     DEFINE_PROP_BOOL("join-records", SCSITapeState, join_records, false),
     DEFINE_PROP_UINT32("capacity-mb", SCSITapeState, capacity_mb, 0),
+    DEFINE_PROP_BOOL("autoload-after-unload", SCSITapeState,
+                     autoload_after_unload, false),
 };
 
 static void scsi_tape_class_init(ObjectClass *klass, const void *data)
@@ -1435,6 +1644,7 @@ static void scsi_tape_class_init(ObjectClass *klass, const void *data)
     dc->desc = "virtual SCSI tape drive (SIMH .tap image)";
     device_class_set_props(dc, scsi_tape_properties);
     dc->vmsd = &vmstate_scsi_tape;
+    device_class_set_legacy_reset(dc, scsi_tape_reset);
 }
 
 static const TypeInfo scsi_tape_info = {
