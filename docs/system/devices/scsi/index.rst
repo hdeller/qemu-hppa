@@ -8,3 +8,4 @@ storage.
    :maxdepth: 1
 
    migrate-pr.rst
+   scsi-tape.rst

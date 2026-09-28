@@ -10,6 +10,7 @@
 
 #include "qemu/osdep.h"
 #include "libqtest-single.h"
+#include "qemu/bswap.h"
 #include "qemu/module.h"
 #include "scsi/constants.h"
 #include "libqos/libqos-pc.h"
@@ -61,7 +62,7 @@ static uint64_t qvirtio_scsi_alloc(QVirtioSCSIQueues *vs, size_t alloc_size,
 
 static uint8_t virtio_scsi_do_command(QVirtioSCSIQueues *vs,
                                       const uint8_t *cdb,
-                                      const uint8_t *data_in,
+                                      uint8_t *data_in,
                                       size_t data_in_len,
                                       uint8_t *data_out, size_t data_out_len,
                                       struct virtio_scsi_cmd_resp *resp_out)
@@ -110,6 +111,9 @@ static uint8_t virtio_scsi_do_command(QVirtioSCSIQueues *vs,
     if (resp_out) {
         memread(resp_addr, resp_out, sizeof(*resp_out));
     }
+    if (data_in_len) {
+        memread(data_in_addr, data_in, data_in_len);
+    }
 
     guest_free(alloc, req_addr);
     guest_free(alloc, resp_addr);
@@ -118,11 +122,9 @@ static uint8_t virtio_scsi_do_command(QVirtioSCSIQueues *vs,
     return response;
 }
 
-static QVirtioSCSIQueues *qvirtio_scsi_init(QVirtioDevice *dev)
+static QVirtioSCSIQueues *qvirtio_scsi_init_queues(QVirtioDevice *dev)
 {
     QVirtioSCSIQueues *vs;
-    const uint8_t test_unit_ready_cdb[VIRTIO_SCSI_CDB_SIZE] = {};
-    struct virtio_scsi_cmd_resp resp;
     uint64_t features;
     int i;
 
@@ -142,6 +144,14 @@ static QVirtioSCSIQueues *qvirtio_scsi_init(QVirtioDevice *dev)
     }
 
     qvirtio_set_driver_ok(dev);
+    return vs;
+}
+
+static QVirtioSCSIQueues *qvirtio_scsi_init(QVirtioDevice *dev)
+{
+    QVirtioSCSIQueues *vs = qvirtio_scsi_init_queues(dev);
+    const uint8_t test_unit_ready_cdb[VIRTIO_SCSI_CDB_SIZE] = {};
+    struct virtio_scsi_cmd_resp resp;
 
     /* Clear the POWER ON OCCURRED unit attention */
     g_assert_cmpint(virtio_scsi_do_command(vs, test_unit_ready_cdb,
@@ -336,6 +346,420 @@ static void test_iothread_virtio_error(void *obj, void *data,
     qvirtio_scsi_pci_free(vs);
 }
 
+/* scsi-tape */
+
+static char *tape_path;
+
+static uint8_t tape_cmd(QVirtioSCSIQueues *vs, const uint8_t *cdb,
+                        uint8_t *data_in, size_t data_in_len,
+                        uint8_t *data_out, size_t data_out_len,
+                        struct virtio_scsi_cmd_resp *resp)
+{
+    g_assert_cmpint(virtio_scsi_do_command(vs, cdb, data_in, data_in_len,
+                                           data_out, data_out_len, resp),
+                    ==, 0);
+    return resp->status;
+}
+
+static void tape_assert_sense(struct virtio_scsi_cmd_resp *resp,
+                              uint8_t flags_key, uint8_t asc, uint8_t ascq)
+{
+    g_assert_cmphex(resp->status, ==, CHECK_CONDITION);
+    g_assert_cmphex(resp->sense[0] & 0x7f, ==, 0x70);
+    g_assert_cmphex(resp->sense[2], ==, flags_key);
+    g_assert_cmphex(resp->sense[12], ==, asc);
+    g_assert_cmphex(resp->sense[13], ==, ascq);
+}
+
+static uint32_t tape_sense_info(struct virtio_scsi_cmd_resp *resp)
+{
+    g_assert(resp->sense[0] & 0x80);    /* VALID */
+    return ldl_be_p(&resp->sense[3]);
+}
+
+static uint32_t tape_read_position(QVirtioSCSIQueues *vs, bool *bop)
+{
+    const uint8_t cdb[VIRTIO_SCSI_CDB_SIZE] = { READ_POSITION };
+    struct virtio_scsi_cmd_resp resp;
+    uint8_t pos[20];
+
+    g_assert_cmphex(tape_cmd(vs, cdb, pos, sizeof(pos), NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert_cmphex(pos[0] & 0x04, ==, 0);      /* BPU clear */
+    *bop = pos[0] & 0x80;
+    g_assert_cmpuint(ldl_be_p(&pos[4]), ==, ldl_be_p(&pos[8]));
+    return ldl_be_p(&pos[4]);
+}
+
+/* MODE SENSE(6): the block length of the block descriptor */
+static uint32_t tape_block_length(QVirtioSCSIQueues *vs)
+{
+    const uint8_t cdb[VIRTIO_SCSI_CDB_SIZE] = { MODE_SENSE, 0, 0, 0, 12 };
+    struct virtio_scsi_cmd_resp resp;
+    uint8_t hdr[12];
+
+    g_assert_cmphex(tape_cmd(vs, cdb, hdr, sizeof(hdr), NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert_cmpuint(hdr[3], ==, 8);    /* block descriptor length */
+    return ldl_be_p(&hdr[8]) & 0xffffff;
+}
+
+/* Consume the unit attention that the reset left behind. */
+static void tape_start(QVirtioSCSIQueues *vs)
+{
+    const uint8_t tur[VIRTIO_SCSI_CDB_SIZE] = { TEST_UNIT_READY };
+    struct virtio_scsi_cmd_resp resp;
+
+    tape_cmd(vs, tur, NULL, 0, NULL, 0, &resp);
+    g_assert_cmphex(resp.status, ==, CHECK_CONDITION);
+    g_assert_cmphex(resp.sense[2], ==, UNIT_ATTENTION);
+    g_assert_cmphex(resp.sense[12], ==, 0x29);
+    g_assert_cmphex(tape_cmd(vs, tur, NULL, 0, NULL, 0, &resp), ==, GOOD);
+}
+
+static void tape_finish(QVirtioSCSIQueues *vs)
+{
+    qvirtio_scsi_pci_free(vs);
+    unlink(tape_path);
+    g_free(tape_path);
+    tape_path = NULL;
+}
+
+/* Append one .tap data record to @tap. */
+static void tape_append_record(GByteArray *tap, const uint8_t *data,
+                               uint32_t len)
+{
+    uint8_t word[4];
+    uint8_t pad = 0;
+
+    stl_le_p(word, len);
+    g_byte_array_append(tap, word, 4);
+    g_byte_array_append(tap, data, len);
+    if (len & 1) {
+        g_byte_array_append(tap, &pad, 1);
+    }
+    g_byte_array_append(tap, word, 4);
+}
+
+/*
+ * Default properties.  Write records of both modes and a filemark to an
+ * empty image, check the image byte for byte, then position and read
+ * everything back.
+ */
+static void test_tape_round_trip(void *obj, void *data,
+                                 QGuestAllocator *t_alloc)
+{
+    QVirtioSCSI *scsi = obj;
+    QVirtioSCSIQueues *vs;
+    struct virtio_scsi_cmd_resp resp;
+    const uint8_t tur[VIRTIO_SCSI_CDB_SIZE] = { TEST_UNIT_READY };
+    const uint8_t inquiry[VIRTIO_SCSI_CDB_SIZE] = { INQUIRY, 0, 0, 0, 96 };
+    const uint8_t write_100[VIRTIO_SCSI_CDB_SIZE] = { WRITE_6, 0, 0, 0, 100 };
+    const uint8_t write_513[VIRTIO_SCSI_CDB_SIZE] = { WRITE_6, 0, 0, 2, 1 };
+    const uint8_t write_2blk[VIRTIO_SCSI_CDB_SIZE] = { WRITE_6, 1, 0, 0, 2 };
+    const uint8_t wfm_1[VIRTIO_SCSI_CDB_SIZE] = { WRITE_FILEMARKS, 0, 0, 0, 1 };
+    const uint8_t rewind[VIRTIO_SCSI_CDB_SIZE] = { REWIND };
+    const uint8_t read_100[VIRTIO_SCSI_CDB_SIZE] = { READ_6, 0, 0, 0, 100 };
+    const uint8_t read_1024[VIRTIO_SCSI_CDB_SIZE] = { READ_6, 0, 0, 4, 0 };
+    const uint8_t read_1024_sili[VIRTIO_SCSI_CDB_SIZE] = { READ_6, 2, 0, 4, 0 };
+    const uint8_t read_2blk[VIRTIO_SCSI_CDB_SIZE] = { READ_6, 1, 0, 0, 2 };
+    const uint8_t locate_1[VIRTIO_SCSI_CDB_SIZE] = { LOCATE_10, 0, 0,
+                                                     0, 0, 0, 1 };
+    const uint8_t space_back_1[VIRTIO_SCSI_CDB_SIZE] = { SPACE, 0,
+                                                         0xff, 0xff, 0xff };
+    const uint8_t prevent[VIRTIO_SCSI_CDB_SIZE] = { ALLOW_MEDIUM_REMOVAL,
+                                                    0, 0, 0, 1 };
+    const uint8_t unload[VIRTIO_SCSI_CDB_SIZE] = { LOAD_UNLOAD };
+    const uint8_t load[VIRTIO_SCSI_CDB_SIZE] = { LOAD_UNLOAD, 0, 0, 0, 1 };
+    const uint8_t select_6[VIRTIO_SCSI_CDB_SIZE] = { MODE_SELECT, 0x10,
+                                                     0, 0, 12 };
+    /* Header (BUF set) and a block descriptor with block length 512 */
+    uint8_t select_512[12] = { 0, 0, 0x10, 8, 0, 0, 0, 0, 0, 0, 2, 0 };
+    const uint8_t log_pages[VIRTIO_SCSI_CDB_SIZE] = { LOG_SENSE, 0, 0x00,
+                                                      0, 0, 0, 0, 0, 64 };
+    uint8_t rec1[100], rec2[513], blocks[1024], buf[1024];
+    g_autoptr(GByteArray) expect = g_byte_array_new();
+    g_autofree char *contents = NULL;
+    const uint8_t tapemark[4] = { 0, 0, 0, 0 };
+    const uint8_t end_of_medium[4] = { 0xff, 0xff, 0xff, 0xff };
+    gsize len;
+    bool bop;
+    int i;
+
+    for (i = 0; i < sizeof(rec1); i++) {
+        rec1[i] = i;
+    }
+    for (i = 0; i < sizeof(rec2); i++) {
+        rec2[i] = 0xa5 ^ i;
+    }
+    for (i = 0; i < sizeof(blocks); i++) {
+        blocks[i] = i * 7;
+    }
+
+    alloc = t_alloc;
+    vs = qvirtio_scsi_init_queues(scsi->vdev);
+    tape_start(vs);
+
+    g_assert_cmphex(tape_cmd(vs, inquiry, buf, 96, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert_cmphex(buf[0], ==, TYPE_TAPE);
+    g_assert_cmphex(buf[1], ==, 0x80);          /* removable */
+    g_assert(!memcmp(&buf[8], "HP      C1537A          L708", 28));
+
+    /* Variable-block mode by default: fixed-block transfers are refused */
+    g_assert_cmpuint(tape_block_length(vs), ==, 0);
+    tape_cmd(vs, write_2blk, NULL, 0, NULL, 0, &resp);
+    tape_assert_sense(&resp, ILLEGAL_REQUEST, 0x24, 0x00);
+    tape_cmd(vs, read_2blk, buf, 1024, NULL, 0, &resp);
+    tape_assert_sense(&resp, ILLEGAL_REQUEST, 0x24, 0x00);
+    g_assert_cmphex(tape_cmd(vs, select_6, NULL, 0, select_512,
+                             sizeof(select_512), &resp), ==, GOOD);
+    g_assert_cmpuint(tape_block_length(vs), ==, 512);
+
+    /* Write: 100 bytes, 513 bytes, a filemark, two fixed 512-byte blocks */
+    g_assert_cmphex(tape_cmd(vs, write_100, NULL, 0, rec1, sizeof(rec1),
+                             &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, write_513, NULL, 0, rec2, sizeof(rec2),
+                             &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, wfm_1, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, write_2blk, NULL, 0, blocks, sizeof(blocks),
+                             &resp), ==, GOOD);
+    g_assert_cmpuint(tape_read_position(vs, &bop), ==, 5);
+    g_assert(!bop);
+
+    /* The image is a plain .tap file */
+    tape_append_record(expect, rec1, sizeof(rec1));
+    tape_append_record(expect, rec2, sizeof(rec2));
+    g_byte_array_append(expect, tapemark, 4);
+    tape_append_record(expect, blocks, 512);
+    tape_append_record(expect, blocks + 512, 512);
+    g_byte_array_append(expect, end_of_medium, 4);
+    g_assert(g_file_get_contents(tape_path, &contents, &len, NULL));
+    g_assert_cmpuint(len, ==, expect->len);
+    g_assert(!memcmp(contents, expect->data, len));
+
+    /* Read back */
+    g_assert_cmphex(tape_cmd(vs, rewind, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmpuint(tape_read_position(vs, &bop), ==, 0);
+    g_assert(bop);
+
+    memset(buf, 0, sizeof(buf));
+    g_assert_cmphex(tape_cmd(vs, read_100, buf, 100, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert(!memcmp(buf, rec1, sizeof(rec1)));
+
+    /* Short record, SILI clear: data, then ILI with the residue */
+    memset(buf, 0, sizeof(buf));
+    tape_cmd(vs, read_1024, buf, 1024, NULL, 0, &resp);
+    tape_assert_sense(&resp, 0x20 | NO_SENSE, 0x00, 0x00);
+    g_assert_cmpuint(tape_sense_info(&resp), ==, 1024 - 513);
+    g_assert(!memcmp(buf, rec2, sizeof(rec2)));
+
+    tape_cmd(vs, read_100, buf, 100, NULL, 0, &resp);
+    tape_assert_sense(&resp, 0x80 | NO_SENSE, 0x00, 0x01);  /* filemark */
+
+    memset(buf, 0, sizeof(buf));
+    g_assert_cmphex(tape_cmd(vs, read_2blk, buf, 1024, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert(!memcmp(buf, blocks, sizeof(blocks)));
+
+    tape_cmd(vs, read_100, buf, 100, NULL, 0, &resp);
+    /* End of data, before early warning: no EOM */
+    tape_assert_sense(&resp, BLANK_CHECK, 0x00, 0x05);
+
+    /* Position: LOCATE to object 1, read it with SILI set */
+    g_assert_cmphex(tape_cmd(vs, locate_1, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    memset(buf, 0, sizeof(buf));
+    g_assert_cmphex(tape_cmd(vs, read_1024_sili, buf, 1024, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert(!memcmp(buf, rec2, sizeof(rec2)));
+    g_assert_cmpuint(tape_read_position(vs, &bop), ==, 2);
+    g_assert_cmphex(tape_cmd(vs, space_back_1, NULL, 0, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert_cmpuint(tape_read_position(vs, &bop), ==, 1);
+
+    /*
+     * A fixed-block read of the 513-byte record: an incorrect-length
+     * block, so ILI, both blocks not read, and the record is passed
+     */
+    tape_cmd(vs, read_2blk, buf, 1024, NULL, 0, &resp);
+    tape_assert_sense(&resp, 0x20 | NO_SENSE, 0x00, 0x00);
+    g_assert_cmpuint(tape_sense_info(&resp), ==, 2);
+    g_assert_cmpuint(tape_read_position(vs, &bop), ==, 2);
+
+    /*
+     * UNLOAD under PREVENT keeps the tape in the drive, rewound, and
+     * medium access reports NOT READY until a LOAD.
+     */
+    g_assert_cmphex(tape_cmd(vs, prevent, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, unload, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    tape_cmd(vs, tur, NULL, 0, NULL, 0, &resp);
+    tape_assert_sense(&resp, NOT_READY, 0x3a, 0x00);
+    tape_cmd(vs, rewind, NULL, 0, NULL, 0, &resp);
+    tape_assert_sense(&resp, NOT_READY, 0x3a, 0x00);
+    g_assert_cmphex(tape_cmd(vs, load, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, tur, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmpuint(tape_read_position(vs, &bop), ==, 0);
+
+    /* LOG SENSE supported pages */
+    memset(buf, 0, sizeof(buf));
+    g_assert_cmphex(tape_cmd(vs, log_pages, buf, 64, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert_cmphex(buf[0], ==, 0x00);
+    g_assert_cmphex(lduw_be_p(&buf[2]), ==, 3);
+    g_assert_cmphex(buf[4], ==, 0x00);
+    g_assert_cmphex(buf[5], ==, 0x02);
+    g_assert_cmphex(buf[6], ==, 0x03);
+
+    tape_finish(vs);
+}
+
+/*
+ * block-size=512, eom-at-eod=on, autoload-after-unload=on and
+ * join-records=on: fixed blocks from power-on, a record read as several
+ * blocks, EOM at every end of data, and a tape unloaded under PREVENT
+ * that the next medium access loads again.
+ */
+static void test_tape_options(void *obj, void *data,
+                              QGuestAllocator *t_alloc)
+{
+    QVirtioSCSI *scsi = obj;
+    QVirtioSCSIQueues *vs;
+    struct virtio_scsi_cmd_resp resp;
+    const uint8_t tur[VIRTIO_SCSI_CDB_SIZE] = { TEST_UNIT_READY };
+    const uint8_t write_2blk[VIRTIO_SCSI_CDB_SIZE] = { WRITE_6, 1, 0, 0, 2 };
+    const uint8_t write_1024[VIRTIO_SCSI_CDB_SIZE] = { WRITE_6, 0, 0, 4, 0 };
+    const uint8_t rewind[VIRTIO_SCSI_CDB_SIZE] = { REWIND };
+    const uint8_t read_2blk[VIRTIO_SCSI_CDB_SIZE] = { READ_6, 1, 0, 0, 2 };
+    const uint8_t read_100[VIRTIO_SCSI_CDB_SIZE] = { READ_6, 0, 0, 0, 100 };
+    const uint8_t prevent[VIRTIO_SCSI_CDB_SIZE] = { ALLOW_MEDIUM_REMOVAL,
+                                                    0, 0, 0, 1 };
+    const uint8_t unload[VIRTIO_SCSI_CDB_SIZE] = { LOAD_UNLOAD };
+    uint8_t blocks[1024], buf[1024];
+    bool bop;
+    int i;
+
+    for (i = 0; i < sizeof(blocks); i++) {
+        blocks[i] = i * 3;
+    }
+
+    alloc = t_alloc;
+    vs = qvirtio_scsi_init_queues(scsi->vdev);
+    tape_start(vs);
+
+    /* Fixed blocks without a MODE SELECT, then one 1024-byte record */
+    g_assert_cmpuint(tape_block_length(vs), ==, 512);
+    g_assert_cmphex(tape_cmd(vs, write_2blk, NULL, 0, blocks, sizeof(blocks),
+                             &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, write_1024, NULL, 0, blocks, sizeof(blocks),
+                             &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, rewind, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    memset(buf, 0, sizeof(buf));
+    g_assert_cmphex(tape_cmd(vs, read_2blk, buf, 1024, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert(!memcmp(buf, blocks, sizeof(blocks)));
+
+    /* The 1024-byte record is read as two blocks */
+    memset(buf, 0, sizeof(buf));
+    g_assert_cmphex(tape_cmd(vs, read_2blk, buf, 1024, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert(!memcmp(buf, blocks, sizeof(blocks)));
+
+    /* End of data reports EOM */
+    tape_cmd(vs, read_100, buf, 100, NULL, 0, &resp);
+    tape_assert_sense(&resp, 0x40 | BLANK_CHECK, 0x00, 0x05);
+
+    /*
+     * UNLOAD under PREVENT: only TEST UNIT READY reports NOT READY, the
+     * next medium access loads the tape again, and PREVENT has ended.
+     */
+    g_assert_cmphex(tape_cmd(vs, prevent, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, unload, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    tape_cmd(vs, tur, NULL, 0, NULL, 0, &resp);
+    tape_assert_sense(&resp, NOT_READY, 0x3a, 0x00);
+    g_assert_cmphex(tape_cmd(vs, rewind, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmphex(tape_cmd(vs, tur, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    g_assert_cmpuint(tape_read_position(vs, &bop), ==, 0);
+    g_assert(bop);
+
+    /* With PREVENT ended, UNLOAD takes the tape out */
+    g_assert_cmphex(tape_cmd(vs, unload, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    tape_cmd(vs, rewind, NULL, 0, NULL, 0, &resp);
+    tape_assert_sense(&resp, NOT_READY, 0x3a, 0x00);
+
+    tape_finish(vs);
+}
+
+/*
+ * Default properties and a 1 MiB capacity, which is inside the 4 MiB
+ * early-warning zone from the start: a write reports early warning, and
+ * end of data comes with EOM.
+ */
+static void test_tape_early_warning(void *obj, void *data,
+                                    QGuestAllocator *t_alloc)
+{
+    QVirtioSCSI *scsi = obj;
+    QVirtioSCSIQueues *vs;
+    struct virtio_scsi_cmd_resp resp;
+    const uint8_t write_100[VIRTIO_SCSI_CDB_SIZE] = { WRITE_6, 0, 0, 0, 100 };
+    const uint8_t rewind[VIRTIO_SCSI_CDB_SIZE] = { REWIND };
+    const uint8_t read_100[VIRTIO_SCSI_CDB_SIZE] = { READ_6, 0, 0, 0, 100 };
+    uint8_t rec[100], buf[100];
+    int i;
+
+    for (i = 0; i < sizeof(rec); i++) {
+        rec[i] = i ^ 0x5a;
+    }
+
+    alloc = t_alloc;
+    vs = qvirtio_scsi_init_queues(scsi->vdev);
+    tape_start(vs);
+
+    tape_cmd(vs, write_100, NULL, 0, rec, sizeof(rec), &resp);
+    tape_assert_sense(&resp, 0x40 | NO_SENSE, 0x00, 0x02);
+    g_assert_cmphex(tape_cmd(vs, rewind, NULL, 0, NULL, 0, &resp), ==, GOOD);
+    memset(buf, 0, sizeof(buf));
+    g_assert_cmphex(tape_cmd(vs, read_100, buf, 100, NULL, 0, &resp),
+                    ==, GOOD);
+    g_assert(!memcmp(buf, rec, sizeof(rec)));
+    tape_cmd(vs, read_100, buf, 100, NULL, 0, &resp);
+    tape_assert_sense(&resp, 0x40 | BLANK_CHECK, 0x00, 0x05);
+
+    tape_finish(vs);
+}
+
+static void tape_setup(GString *cmd_line, const char *options)
+{
+    int fd;
+
+    fd = g_file_open_tmp("qtest-tape.XXXXXX", &tape_path, NULL);
+    g_assert(fd >= 0);
+    close(fd);
+    g_string_append_printf(cmd_line,
+                           " -drive file=%s,if=none,id=dr1,format=raw"
+                           " -device scsi-tape,drive=dr1,lun=0,scsi-id=1%s",
+                           tape_path, options);
+}
+
+static void *virtio_scsi_setup_tape(GString *cmd_line, void *arg)
+{
+    tape_setup(cmd_line, "");
+    return arg;
+}
+
+static void *virtio_scsi_setup_tape_options(GString *cmd_line, void *arg)
+{
+    tape_setup(cmd_line, ",block-size=512,eom-at-eod=on"
+               ",autoload-after-unload=on,join-records=on");
+    return arg;
+}
+
+static void *virtio_scsi_setup_tape_capacity(GString *cmd_line, void *arg)
+{
+    tape_setup(cmd_line, ",capacity-mb=1");
+    return arg;
+}
+
 static void *virtio_scsi_hotplug_setup(GString *cmd_line, void *arg)
 {
     g_string_append(cmd_line,
@@ -401,6 +825,18 @@ static void register_virtio_scsi_test(void)
 
     opts.before = virtio_scsi_setup_cd;
     qos_add_test("write-to-cdrom", "virtio-scsi", test_write_to_cdrom, &opts);
+
+    if (qtest_has_device("scsi-tape")) {
+        opts.before = virtio_scsi_setup_tape;
+        qos_add_test("tape-round-trip", "virtio-scsi", test_tape_round_trip,
+                     &opts);
+        opts.before = virtio_scsi_setup_tape_options;
+        qos_add_test("tape-options", "virtio-scsi", test_tape_options,
+                     &opts);
+        opts.before = virtio_scsi_setup_tape_capacity;
+        qos_add_test("tape-early-warning", "virtio-scsi",
+                     test_tape_early_warning, &opts);
+    }
 
     opts.before = virtio_scsi_setup_iothread;
     opts.edge = (QOSGraphEdgeOptions) {
