@@ -395,3 +395,6 @@ scsi_generic_pr_state_preempt(uint64_t key, uint8_t resv_type) "key=0x%" PRIx64 
 
 # scsi-tape.c
 scsi_tape_read6(int target, int lun, uint32_t tag, int fixed, int sili, uint32_t xfer, uint32_t delivered, int ili, uint32_t info) "target %d lun %d tag 0x%x fixed %d sili %d xfer %u delivered %u ili %d info 0x%x"
+scsi_tape_mode_sense(int target, int ten, int page, int dbd, int len) "target %d MODE SENSE ten %d page 0x%02x dbd %d len %d"
+scsi_tape_mode_select(int target, uint32_t block_size, int buffered, int compression) "target %d MODE SELECT block_size %u buffered %d compression %d"
+scsi_tape_log_sense(int target, int page, int len) "target %d LOG SENSE page 0x%02x len %d"

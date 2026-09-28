@@ -89,6 +89,17 @@ struct SCSITapeState {
     /* A medium is present and the drive is loaded. */
     bool loaded;
 
+    /* Mode parameters that MODE SELECT can change. */
+    uint8_t dev_cfg_flags;      /* device configuration page, byte 8 */
+    uint8_t dev_cfg_eod_flags;  /* device configuration page, byte 10 */
+    uint8_t dev_cfg_sel_comp;   /* device configuration page, byte 14 */
+    bool compression;           /* DCE, data compression pages */
+    bool buffered_mode;         /* BUF, mode parameter header */
+
+    /* Counters for LOG SENSE. */
+    uint64_t bytes_read;
+    uint64_t bytes_written;
+
     char *vendor;
     char *product;
     char *ver;
@@ -275,6 +286,7 @@ static bool scsi_tape_write_record(SCSITapeState *s, const uint8_t *data,
         return false;
     }
     scsi_tape_skip_data(s, len);
+    s->bytes_written += len;
     return true;
 }
 
@@ -579,6 +591,7 @@ static int scsi_tape_read6_fixed(SCSITapeReq *r, uint32_t want)
     }
 
     r->buflen = got;
+    s->bytes_read += got;
     if (stopped) {
         /*
          * INFORMATION is the number of blocks not read.  An
@@ -651,6 +664,7 @@ static int scsi_tape_read6_variable(SCSITapeReq *r, uint32_t xfer, bool sili)
     }
     scsi_tape_skip_data(s, len);
     r->buflen = n;
+    s->bytes_read += n;
 
     /*
      * Incorrect length: with SILI clear, a record shorter or longer than
@@ -808,6 +822,274 @@ static void scsi_tape_erase(SCSITapeReq *r, uint8_t *cdb)
     scsi_tape_mark_end(s);
 }
 
+/* Mode pages */
+
+#define TAPE_MODE_PAGE_DISCONNECT               0x02
+#define TAPE_MODE_PAGE_DATA_COMPRESSION         0x0f
+#define TAPE_MODE_PAGE_DEVICE_CONFIG            0x10
+/* The C1537A reports a second data compression page at 0x11. */
+#define TAPE_MODE_PAGE_DATA_COMPRESSION_ALT     0x11
+
+#define TAPE_DENSITY_DDS3               0x25
+#define TAPE_COMPRESSION_DCLZ           0x00000020
+#define TAPE_WRITE_BUFFER_FULL_RATIO    0x50    /* 80 % */
+#define TAPE_READ_BUFFER_EMPTY_RATIO    0x14    /* 20 % */
+#define TAPE_MODE_HDR_BUF               0x10    /* device-specific byte */
+#define TAPE_MODE_HDR_WP                0x80    /* device-specific byte */
+
+static const uint8_t scsi_tape_mode_pages[] = {
+    TAPE_MODE_PAGE_DISCONNECT,
+    TAPE_MODE_PAGE_DATA_COMPRESSION,
+    TAPE_MODE_PAGE_DEVICE_CONFIG,
+    TAPE_MODE_PAGE_DATA_COMPRESSION_ALT,
+    MODE_PAGE_FAULT_FAIL,
+};
+
+/* Build one mode page at @p; returns its length, 0 if not supported. */
+static int scsi_tape_mode_page(SCSITapeState *s, uint8_t page, uint8_t *p)
+{
+    switch (page) {
+    case TAPE_MODE_PAGE_DISCONNECT:
+        memset(p, 0, 16);
+        p[0] = page;
+        p[1] = 14;
+        p[2] = TAPE_WRITE_BUFFER_FULL_RATIO;
+        p[3] = TAPE_READ_BUFFER_EMPTY_RATIO;
+        return 16;
+    case TAPE_MODE_PAGE_DATA_COMPRESSION:
+    case TAPE_MODE_PAGE_DATA_COMPRESSION_ALT:
+        memset(p, 0, 16);
+        p[0] = page;
+        p[1] = 14;
+        p[2] = (s->compression ? 0x80 : 0) | 0x40;  /* DCE, DCC */
+        p[3] = 0x80;                                /* DDE */
+        stl_be_p(&p[4], TAPE_COMPRESSION_DCLZ);     /* compression alg. */
+        return 16;
+    case TAPE_MODE_PAGE_DEVICE_CONFIG:
+        memset(p, 0, 16);
+        p[0] = page;
+        p[1] = 14;
+        p[4] = TAPE_WRITE_BUFFER_FULL_RATIO;
+        p[5] = TAPE_READ_BUFFER_EMPTY_RATIO;
+        stw_be_p(&p[6], 1);                         /* write delay time */
+        p[8] = s->dev_cfg_flags;
+        p[10] = s->dev_cfg_eod_flags;
+        p[14] = s->dev_cfg_sel_comp;
+        return 16;
+    case MODE_PAGE_FAULT_FAIL:
+        /* Informational exceptions control: EWASC, LOGERR, MRIE 5 */
+        memset(p, 0, 12);
+        p[0] = page;
+        p[1] = 10;
+        p[2] = 0x21;
+        p[3] = 0x05;
+        return 12;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * MODE SENSE(6) and (10).  Current values are returned for any page
+ * control value.  Page code 0 returns the header and block descriptor
+ * only.
+ */
+static int scsi_tape_emulate_mode_sense(SCSITapeReq *r, uint8_t *outbuf,
+                                        bool ten)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    uint8_t *cdb = r->req.cmd.buf;
+    bool dbd = cdb[1] & 0x08;
+    uint8_t page = cdb[2] & 0x3f;
+    int len = ten ? 8 : 4;
+    int bd_len = 0;
+    uint8_t dsp;
+    int i, n;
+
+    if (!dbd) {
+        uint8_t *bd = &outbuf[len];
+
+        memset(bd, 0, 8);
+        bd[0] = TAPE_DENSITY_DDS3;
+        bd[5] = s->block_size >> 16;
+        bd[6] = s->block_size >> 8;
+        bd[7] = s->block_size;
+        bd_len = 8;
+        len += 8;
+    }
+
+    if (page == MODE_PAGE_ALLS) {
+        for (i = 0; i < ARRAY_SIZE(scsi_tape_mode_pages); i++) {
+            len += scsi_tape_mode_page(s, scsi_tape_mode_pages[i],
+                                       &outbuf[len]);
+        }
+    } else if (page != 0) {
+        n = scsi_tape_mode_page(s, page, &outbuf[len]);
+        if (!n) {
+            scsi_tape_check_condition(r, SENSE_CODE(INVALID_FIELD));
+            return -1;
+        }
+        len += n;
+    }
+
+    dsp = (blk_is_writable(s->qdev.conf.blk) ? 0 : TAPE_MODE_HDR_WP) |
+          (s->buffered_mode ? TAPE_MODE_HDR_BUF : 0);
+    if (ten) {
+        stw_be_p(&outbuf[0], len - 2);
+        outbuf[2] = 0;              /* medium type */
+        outbuf[3] = dsp;
+        outbuf[4] = 0;
+        outbuf[5] = 0;
+        stw_be_p(&outbuf[6], bd_len);
+    } else {
+        outbuf[0] = len - 1;
+        outbuf[1] = 0;              /* medium type */
+        outbuf[2] = dsp;
+        outbuf[3] = bd_len;
+    }
+    trace_scsi_tape_mode_sense(s->qdev.id, ten, page, dbd, len);
+    return len;
+}
+
+/*
+ * MODE SELECT(6) and (10) parameter list.  The block length, the BUF
+ * bit, the device configuration fields and DCE are applied; other pages
+ * are accepted and ignored.  Nothing is changed unless the whole list is
+ * well-formed.
+ */
+static void scsi_tape_emulate_mode_select(SCSITapeReq *r, uint8_t *inbuf,
+                                          int len, bool ten)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    uint32_t block_size = s->block_size;
+    uint8_t cfg_flags = s->dev_cfg_flags;
+    uint8_t cfg_eod_flags = s->dev_cfg_eod_flags;
+    uint8_t cfg_sel_comp = s->dev_cfg_sel_comp;
+    bool compression = s->compression;
+    bool buffered;
+    int idx = ten ? 8 : 4;
+    int bd_len;
+
+    if (len < idx) {
+        goto invalid;
+    }
+    buffered = inbuf[ten ? 3 : 2] & TAPE_MODE_HDR_BUF;
+    bd_len = ten ? lduw_be_p(&inbuf[6]) : inbuf[3];
+
+    if (bd_len >= 8) {
+        if (idx + bd_len > len) {
+            goto invalid;
+        }
+        block_size = (inbuf[idx + 5] << 16) | (inbuf[idx + 6] << 8) |
+                     inbuf[idx + 7];
+        if (block_size > 0xffff) {
+            goto invalid;
+        }
+    }
+    idx += bd_len;
+
+    while (idx < len) {
+        uint8_t page = inbuf[idx] & 0x3f;
+        uint8_t page_len;
+
+        if (page == 0) {
+            break;
+        }
+        if (idx + 1 >= len) {
+            goto invalid;
+        }
+        page_len = inbuf[idx + 1];
+        if (idx + 2 + page_len > len) {
+            goto invalid;
+        }
+        switch (page) {
+        case TAPE_MODE_PAGE_DEVICE_CONFIG:
+            if (page_len >= 14) {
+                cfg_flags = inbuf[idx + 8];
+                cfg_eod_flags = inbuf[idx + 10];
+                cfg_sel_comp = inbuf[idx + 14];
+            }
+            break;
+        case TAPE_MODE_PAGE_DATA_COMPRESSION:
+        case TAPE_MODE_PAGE_DATA_COMPRESSION_ALT:
+            if (page_len >= 2) {
+                compression = inbuf[idx + 2] & 0x80;
+            }
+            break;
+        default:
+            break;
+        }
+        idx += 2 + page_len;
+    }
+
+    s->block_size = block_size;
+    s->qdev.blocksize = block_size;
+    s->dev_cfg_flags = cfg_flags;
+    s->dev_cfg_eod_flags = cfg_eod_flags;
+    s->dev_cfg_sel_comp = cfg_sel_comp;
+    s->compression = compression;
+    s->buffered_mode = buffered;
+    trace_scsi_tape_mode_select(s->qdev.id, block_size, buffered,
+                                compression);
+    return;
+
+invalid:
+    scsi_tape_check_condition(r, SENSE_CODE(INVALID_PARAM));
+}
+
+/* Log pages */
+
+static uint8_t *scsi_tape_log_param(uint8_t *p, uint16_t code, int size,
+                                    uint64_t value)
+{
+    stw_be_p(&p[0], code);
+    p[2] = 0;
+    p[3] = size;
+    if (size == 8) {
+        stq_be_p(&p[4], value);
+    } else {
+        stl_be_p(&p[4], value);
+    }
+    return p + 4 + size;
+}
+
+/*
+ * LOG SENSE: supported pages (0x00), write error counters (0x02) and
+ * read error counters (0x03).  The emulated medium has no errors, so only
+ * the bytes-processed counters move.
+ */
+static int scsi_tape_emulate_log_sense(SCSITapeReq *r, uint8_t *outbuf)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    uint8_t page = r->req.cmd.buf[2] & 0x3f;
+    uint8_t *p = outbuf + 4;
+    uint64_t bytes;
+
+    switch (page) {
+    case 0x00:
+        *p++ = 0x00;
+        *p++ = 0x02;
+        *p++ = 0x03;
+        break;
+    case 0x02:
+    case 0x03:
+        bytes = page == 0x02 ? s->bytes_written : s->bytes_read;
+        p = scsi_tape_log_param(p, 0x0003, 4, 0);      /* errors corrected */
+        p = scsi_tape_log_param(p, 0x0005, 8, bytes);  /* bytes processed */
+        p = scsi_tape_log_param(p, 0x0006, 4, 0);      /* uncorrected */
+        break;
+    default:
+        scsi_tape_check_condition(r, SENSE_CODE(INVALID_FIELD));
+        return -1;
+    }
+
+    outbuf[0] = page;
+    outbuf[1] = 0;
+    stw_be_p(&outbuf[2], p - outbuf - 4);
+    trace_scsi_tape_log_sense(s->qdev.id, page, p - outbuf);
+    return p - outbuf;
+}
+
 static int scsi_tape_emulate_inquiry(SCSITapeReq *r, uint8_t *outbuf)
 {
     SCSITapeState *s = SCSI_TAPE(r->req.dev);
@@ -857,6 +1139,10 @@ static bool scsi_tape_cmd_needs_no_medium(uint8_t opcode)
     switch (opcode) {
     case INQUIRY:
     case REQUEST_SENSE:
+    case MODE_SENSE:
+    case MODE_SENSE_10:
+    case MODE_SELECT:
+    case MODE_SELECT_10:
         return true;
     default:
         return false;
@@ -940,6 +1226,29 @@ static int32_t scsi_tape_send_command(SCSIRequest *req, uint8_t *buf)
         scsi_tape_erase(r, buf);
         break;
 
+    case MODE_SENSE:
+    case MODE_SENSE_10:
+        buflen = scsi_tape_emulate_mode_sense(r, outbuf,
+                                              buf[0] == MODE_SENSE_10);
+        break;
+
+    case MODE_SELECT:
+    case MODE_SELECT_10:
+        /* PF must be set.  SP is accepted, but nothing is saved. */
+        if (!(buf[1] & 0x10)) {
+            scsi_tape_check_condition(r, SENSE_CODE(INVALID_FIELD));
+            break;
+        }
+        if (req->cmd.xfer == 0) {
+            break;
+        }
+        r->awaiting_data_out = true;
+        return -(int32_t)req->cmd.xfer;
+
+    case LOG_SENSE:
+        buflen = scsi_tape_emulate_log_sense(r, outbuf);
+        break;
+
     default:
         scsi_tape_check_condition(r, SENSE_CODE(INVALID_OPCODE));
         break;
@@ -985,6 +1294,11 @@ static void scsi_tape_write_data(SCSIRequest *req)
     switch (req->cmd.buf[0]) {
     case WRITE_6:
         scsi_tape_write6(r);
+        break;
+    case MODE_SELECT:
+    case MODE_SELECT_10:
+        scsi_tape_emulate_mode_select(r, r->buf, req->cmd.xfer,
+                                      req->cmd.buf[0] == MODE_SELECT_10);
         break;
     default:
         scsi_tape_check_condition(r, SENSE_CODE(INVALID_OPCODE));
@@ -1060,17 +1374,41 @@ static void scsi_tape_realize(SCSIDevice *dev, Error **errp)
     s->qdev.blocksize = s->block_size;
     scsi_tape_rewind(s);
     s->loaded = blk_is_inserted(s->qdev.conf.blk);
+
+    /* Power-on mode parameters: rewind on reset, EOD defined, no DCE. */
+    s->dev_cfg_flags = 0x01;
+    s->dev_cfg_eod_flags = 0x38;
+    s->dev_cfg_sel_comp = 0x01;
+    s->compression = false;
+    s->buffered_mode = true;
+}
+
+static int scsi_tape_post_load(void *opaque, int version_id)
+{
+    SCSITapeState *s = opaque;
+
+    s->qdev.blocksize = s->block_size;
+    return 0;
 }
 
 static const VMStateDescription vmstate_scsi_tape = {
     .name = "scsi-tape",
     .version_id = 1,
     .minimum_version_id = 1,
+    .post_load = scsi_tape_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_SCSI_DEVICE(qdev, SCSITapeState),
         VMSTATE_UINT64(pos, SCSITapeState),
         VMSTATE_UINT32(rec_consumed, SCSITapeState),
         VMSTATE_BOOL(loaded, SCSITapeState),
+        VMSTATE_UINT32(block_size, SCSITapeState),
+        VMSTATE_UINT8(dev_cfg_flags, SCSITapeState),
+        VMSTATE_UINT8(dev_cfg_eod_flags, SCSITapeState),
+        VMSTATE_UINT8(dev_cfg_sel_comp, SCSITapeState),
+        VMSTATE_BOOL(compression, SCSITapeState),
+        VMSTATE_BOOL(buffered_mode, SCSITapeState),
+        VMSTATE_UINT64(bytes_read, SCSITapeState),
+        VMSTATE_UINT64(bytes_written, SCSITapeState),
         VMSTATE_END_OF_LIST()
     }
 };
