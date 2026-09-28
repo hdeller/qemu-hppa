@@ -75,6 +75,13 @@ struct SCSITapeState {
      */
     uint32_t rec_consumed;
 
+    /*
+     * Logical object number of the record at @pos: the count of data
+     * records and filemarks between BOP and @pos.  This is the block
+     * address of READ POSITION and LOCATE.
+     */
+    uint64_t lobj;
+
     /* Block length used for fixed-mode transfers ("block-size"). */
     uint32_t block_size;
     /* Report EOM at every end of data ("eom-at-eod"). */
@@ -181,11 +188,13 @@ static uint64_t scsi_tape_record_size(uint32_t data_len)
 static void scsi_tape_skip_data(SCSITapeState *s, uint32_t data_len)
 {
     s->pos += scsi_tape_record_size(data_len);
+    s->lobj++;
 }
 
 static void scsi_tape_skip_filemark(SCSITapeState *s)
 {
     s->pos += 4;
+    s->lobj++;
 }
 
 static void scsi_tape_skip_gap(SCSITapeState *s)
@@ -197,6 +206,7 @@ static void scsi_tape_rewind(SCSITapeState *s)
 {
     s->pos = 0;
     s->rec_consumed = 0;
+    s->lobj = 0;
 }
 
 /*
@@ -490,6 +500,7 @@ static void scsi_tape_space(SCSITapeReq *r, uint8_t *cdb)
         switch (raw) {
         case TAP_TAPEMARK:
             s->pos -= 4;
+            s->lobj--;
             if (code == 1) {
                 done--;
             } else {
@@ -510,6 +521,7 @@ static void scsi_tape_space(SCSITapeReq *r, uint8_t *cdb)
                 break;
             }
             s->pos -= size;
+            s->lobj--;
             if (code == 0) {
                 done--;
             }
@@ -730,6 +742,72 @@ static int scsi_tape_read6(SCSITapeReq *r, uint8_t *cdb)
         return scsi_tape_read6_fixed(r, xfer);
     }
     return scsi_tape_read6_variable(r, xfer, sili);
+}
+
+/*
+ * READ POSITION, short form.  Logical and device-specific block
+ * addresses (BT) are the same here: the logical object number.  In the
+ * middle of a record (after a fixed-mode read with "join-records") there
+ * is no such number and the position is reported as unknown (BPU).
+ */
+static int scsi_tape_read_position(SCSITapeReq *r, uint8_t *outbuf)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    uint8_t form = r->req.cmd.buf[1] & 0x1f;
+
+    if (form != 0x00 && form != 0x01) {
+        scsi_tape_check_condition(r, SENSE_CODE(INVALID_FIELD));
+        return -1;
+    }
+
+    memset(outbuf, 0, 20);
+    if (s->rec_consumed || s->lobj > UINT32_MAX) {
+        outbuf[0] = 0x04;                   /* BPU */
+    } else {
+        outbuf[0] = s->lobj == 0 ? 0x80 : 0; /* BOP */
+        stl_be_p(&outbuf[4], s->lobj);      /* first block location */
+        stl_be_p(&outbuf[8], s->lobj);      /* last block location */
+    }
+    return 20;
+}
+
+/* LOCATE(10) to a logical object number, in the only partition. */
+static void scsi_tape_locate(SCSITapeReq *r, uint8_t *cdb)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    uint64_t target = ldl_be_p(&cdb[3]);
+
+    if ((cdb[1] & 0x02) && cdb[8] != 0) {
+        /* CP: change to a partition other than 0 */
+        scsi_tape_check_condition(r, SENSE_CODE(INVALID_FIELD));
+        return;
+    }
+
+    scsi_tape_sync_to_record_boundary(s);
+    if (target < s->lobj) {
+        scsi_tape_rewind(s);
+    }
+    while (s->lobj < target) {
+        uint32_t len = 0;
+
+        switch (scsi_tape_peek_record(s, &len)) {
+        case TAP_REC_DATA:
+            scsi_tape_skip_data(s, len);
+            break;
+        case TAP_REC_FILEMARK:
+            scsi_tape_skip_filemark(s);
+            break;
+        case TAP_REC_ERASE_GAP:
+            scsi_tape_skip_gap(s);
+            break;
+        case TAP_REC_END_MEDIUM:
+            scsi_tape_check_condition(r, scsi_tape_sense_eod);
+            return;
+        case TAP_REC_IOERR:
+            scsi_tape_check_condition(r, SENSE_CODE(IO_ERROR));
+            return;
+        }
+    }
 }
 
 /* WRITE(6), called once the data has arrived in r->buf. */
@@ -1291,6 +1369,7 @@ static bool scsi_tape_cmd_ends_unload_hold(uint8_t opcode)
     case WRITE_6:
     case WRITE_FILEMARKS:
     case ERASE:
+    case LOCATE_10:
         return true;
     default:
         return false;
@@ -1417,6 +1496,14 @@ static int32_t scsi_tape_send_command(SCSIRequest *req, uint8_t *buf)
 
     case ALLOW_MEDIUM_REMOVAL:
         s->removal_prevented = buf[4] & 0x01;
+        break;
+
+    case READ_POSITION:
+        buflen = scsi_tape_read_position(r, outbuf);
+        break;
+
+    case LOCATE_10:
+        scsi_tape_locate(r, buf);
         break;
 
     default:
@@ -1605,6 +1692,7 @@ static const VMStateDescription vmstate_scsi_tape = {
         VMSTATE_SCSI_DEVICE(qdev, SCSITapeState),
         VMSTATE_UINT64(pos, SCSITapeState),
         VMSTATE_UINT32(rec_consumed, SCSITapeState),
+        VMSTATE_UINT64(lobj, SCSITapeState),
         VMSTATE_BOOL(loaded, SCSITapeState),
         VMSTATE_BOOL(removal_prevented, SCSITapeState),
         VMSTATE_BOOL(unload_hold, SCSITapeState),
