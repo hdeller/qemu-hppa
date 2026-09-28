@@ -81,6 +81,11 @@ struct SCSITapeState {
     /* Fixed-mode reads cut blocks across records ("join-records"). */
     bool join_records;
 
+    /* Medium capacity in MiB of image file, 0 for unlimited. */
+    uint32_t capacity_mb;
+    /* The image may be grown (BLK_PERM_RESIZE is held). */
+    bool can_resize;
+
     /* A medium is present and the drive is loaded. */
     bool loaded;
 
@@ -100,6 +105,8 @@ typedef struct SCSITapeReq {
      * parsed and the status is reported once the data phase is over.
      */
     bool deferred_check;
+    /* A data-out command is waiting for its data to be transferred. */
+    bool awaiting_data_out;
 } SCSITapeReq;
 
 /* .tap record layer */
@@ -188,6 +195,127 @@ static void scsi_tape_sync_to_record_boundary(SCSITapeState *s)
     }
 }
 
+/*
+ * Writing.  The image grows as records are written, up to "capacity-mb"
+ * if that is set.  Growing needs BLK_PERM_RESIZE on our own BlockBackend,
+ * which blkconf_apply_backend_options() does not take, so it is asked for
+ * whenever a writable medium is mounted.
+ */
+static void scsi_tape_note_mount(SCSITapeState *s)
+{
+    BlockBackend *blk = s->qdev.conf.blk;
+    uint64_t perm, shared;
+
+    blk_get_perm(blk, &perm, &shared);
+    s->can_resize = (perm & BLK_PERM_WRITE) &&
+                    blk_set_perm(blk, perm | BLK_PERM_RESIZE, shared,
+                                 NULL) == 0;
+}
+
+static uint64_t scsi_tape_capacity(SCSITapeState *s)
+{
+    return (uint64_t)s->capacity_mb * MiB;
+}
+
+/* Make the image at least @new_len bytes long. */
+static bool scsi_tape_grow(SCSITapeState *s, uint64_t new_len)
+{
+    BlockBackend *blk = s->qdev.conf.blk;
+    uint64_t cap = scsi_tape_capacity(s);
+    int64_t cur = blk_getlength(blk);
+
+    if (cur < 0 || (cap && new_len > cap)) {
+        return false;
+    }
+    if ((uint64_t)cur >= new_len) {
+        return true;
+    }
+    return s->can_resize &&
+           blk_truncate(blk, new_len, false, PREALLOC_MODE_OFF, 0,
+                        NULL) == 0;
+}
+
+/* Early warning: less than this much capacity is left after a write. */
+#define SCSI_TAPE_EARLY_WARNING         (4 * MiB)
+
+static bool scsi_tape_early_warning(SCSITapeState *s)
+{
+    uint64_t cap = scsi_tape_capacity(s);
+
+    return cap && (cap <= s->pos ||
+                   cap - s->pos <= SCSI_TAPE_EARLY_WARNING);
+}
+
+/*
+ * Write one data record at s->pos.  Room is made first, for the record
+ * and for the end-of-medium word behind it, so a failure leaves neither
+ * a partial record nor a moved position behind.
+ */
+static bool scsi_tape_write_record(SCSITapeState *s, const uint8_t *data,
+                                   uint32_t len)
+{
+    BlockBackend *blk = s->qdev.conf.blk;
+    uint8_t hdr[4];
+    uint8_t pad = 0;
+
+    if (!scsi_tape_grow(s, s->pos + scsi_tape_record_size(len) + 4)) {
+        return false;
+    }
+    stl_le_p(hdr, len);
+    if (blk_pwrite(blk, s->pos, 4, hdr, 0) < 0) {
+        return false;
+    }
+    if (len && blk_pwrite(blk, s->pos + 4, len, data, 0) < 0) {
+        return false;
+    }
+    if ((len & 1) && blk_pwrite(blk, s->pos + 4 + len, 1, &pad, 0) < 0) {
+        return false;
+    }
+    if (blk_pwrite(blk, s->pos + 4 + len + (len & 1), 4, hdr, 0) < 0) {
+        return false;
+    }
+    scsi_tape_skip_data(s, len);
+    return true;
+}
+
+static bool scsi_tape_write_marker(SCSITapeState *s, uint32_t marker)
+{
+    uint8_t word[4];
+
+    /* The marker, and the end-of-medium word behind it */
+    if (!scsi_tape_grow(s, s->pos + 8)) {
+        return false;
+    }
+    stl_le_p(word, marker);
+    if (blk_pwrite(s->qdev.conf.blk, s->pos, 4, word, 0) < 0) {
+        return false;
+    }
+    if (marker == TAP_TAPEMARK) {
+        scsi_tape_skip_filemark(s);
+    } else {
+        scsi_tape_skip_gap(s);
+    }
+    return true;
+}
+
+/*
+ * Mark end of data after a write, without moving.  Like on a real tape,
+ * anything that was recorded beyond the write position is no longer
+ * reachable.  The marker also matters because the block layer sizes an
+ * image in 512-byte sectors and reads the tail of the last sector as
+ * zeros, which would otherwise look like filemarks.  Every write makes
+ * room for the marker, so it is written even when the tape is full.
+ */
+static void scsi_tape_mark_end(SCSITapeState *s)
+{
+    uint8_t word[4];
+
+    if (scsi_tape_grow(s, s->pos + 4)) {
+        stl_le_p(word, TAP_END_MEDIUM);
+        blk_pwrite(s->qdev.conf.blk, s->pos, 4, word, 0);
+    }
+}
+
 /* Sense data */
 
 static const SCSISense scsi_tape_sense_filemark = {
@@ -204,8 +332,18 @@ static const SCSISense scsi_tape_sense_eod = {
  */
 static uint8_t scsi_tape_eod_bits(SCSITapeState *s)
 {
-    return s->eom_at_eod ? SENSE_EOM : 0;
+    return (s->eom_at_eod || scsi_tape_early_warning(s)) ? SENSE_EOM : 0;
 }
+
+/* END-OF-PARTITION/MEDIUM DETECTED: data could not be written. */
+static const SCSISense scsi_tape_sense_overflow = {
+    .key = VOLUME_OVERFLOW, .asc = 0x00, .ascq = 0x02
+};
+
+/* END-OF-PARTITION/MEDIUM DETECTED: written, but past early warning. */
+static const SCSISense scsi_tape_sense_early_warning = {
+    .key = NO_SENSE, .asc = 0x00, .ascq = 0x02
+};
 
 static void scsi_tape_check_condition(SCSITapeReq *r, SCSISense sense)
 {
@@ -568,6 +706,108 @@ static int scsi_tape_read6(SCSITapeReq *r, uint8_t *cdb)
     return scsi_tape_read6_variable(r, xfer, sili);
 }
 
+/* WRITE(6), called once the data has arrived in r->buf. */
+static void scsi_tape_write6(SCSITapeReq *r)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    bool fixed = r->req.cmd.buf[1] & 0x01;
+    uint32_t xfer = r->req.cmd.xfer;
+    uint32_t residue = 0;
+
+    scsi_tape_sync_to_record_boundary(s);
+
+    if (fixed) {
+        /* One record per block. */
+        uint32_t blocks = xfer / s->block_size;
+        uint32_t i;
+
+        for (i = 0; i < blocks; i++) {
+            if (!scsi_tape_write_record(s, r->buf + i * s->block_size,
+                                        s->block_size)) {
+                residue = blocks - i;
+                break;
+            }
+        }
+    } else if (!scsi_tape_write_record(s, r->buf, xfer)) {
+        residue = xfer;
+    }
+    scsi_tape_mark_end(s);
+
+    if (residue) {
+        scsi_tape_check_condition_info(r, scsi_tape_sense_overflow,
+                                       SENSE_EOM, residue);
+        return;
+    }
+
+    /*
+     * The data is on the medium, but the early-warning zone has been
+     * entered: CHECK CONDITION with NO SENSE and EOM, INFORMATION 0.
+     */
+    if (scsi_tape_early_warning(s)) {
+        scsi_tape_check_condition_info(r, scsi_tape_sense_early_warning,
+                                       SENSE_EOM, 0);
+    }
+}
+
+static void scsi_tape_write_filemarks(SCSITapeReq *r, uint8_t *cdb)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    uint32_t count = ldl_be_p(&cdb[1]) & 0xffffff;
+    uint32_t i;
+
+    if (count == 0) {
+        /*
+         * Writing zero filemarks only flushes buffered data.  That is
+         * not an error on a write-protected medium either.
+         */
+        scsi_tape_sync_to_record_boundary(s);
+        return;
+    }
+    if (!blk_is_writable(s->qdev.conf.blk)) {
+        scsi_tape_check_condition(r, SENSE_CODE(WRITE_PROTECTED));
+        return;
+    }
+    scsi_tape_sync_to_record_boundary(s);
+    for (i = 0; i < count; i++) {
+        if (!scsi_tape_write_marker(s, TAP_TAPEMARK)) {
+            break;
+        }
+    }
+    scsi_tape_mark_end(s);
+    if (i < count) {
+        scsi_tape_check_condition_info(r, scsi_tape_sense_overflow,
+                                       SENSE_EOM, count - i);
+    }
+}
+
+static void scsi_tape_erase(SCSITapeReq *r, uint8_t *cdb)
+{
+    SCSITapeState *s = SCSI_TAPE(r->req.dev);
+    BlockBackend *blk = s->qdev.conf.blk;
+    bool long_erase = cdb[1] & 0x01;
+
+    if (!blk_is_writable(blk)) {
+        scsi_tape_check_condition(r, SENSE_CODE(WRITE_PROTECTED));
+        return;
+    }
+    scsi_tape_sync_to_record_boundary(s);
+    if (long_erase) {
+        /* Erase to end of partition: cut the image at the position. */
+        if (!s->can_resize ||
+            blk_truncate(blk, s->pos, true, PREALLOC_MODE_OFF, 0,
+                         NULL) != 0) {
+            scsi_tape_check_condition(r, SENSE_CODE(IO_ERROR));
+            return;
+        }
+    } else if (!scsi_tape_write_marker(s, TAP_ERASE_GAP)) {
+        scsi_tape_mark_end(s);
+        scsi_tape_check_condition_info(r, scsi_tape_sense_overflow,
+                                       SENSE_EOM, 0);
+        return;
+    }
+    scsi_tape_mark_end(s);
+}
+
 static int scsi_tape_emulate_inquiry(SCSITapeReq *r, uint8_t *outbuf)
 {
     SCSITapeState *s = SCSI_TAPE(r->req.dev);
@@ -677,6 +917,29 @@ static int32_t scsi_tape_send_command(SCSIRequest *req, uint8_t *buf)
         buflen = scsi_tape_read6(r, buf);
         break;
 
+    case WRITE_6:
+        if ((buf[1] & 0x01) && scsi_tape_fixed_without_length(s, buf)) {
+            scsi_tape_check_condition(r, SENSE_CODE(INVALID_FIELD));
+            break;
+        }
+        if (!blk_is_writable(s->qdev.conf.blk)) {
+            scsi_tape_check_condition(r, SENSE_CODE(WRITE_PROTECTED));
+            break;
+        }
+        if (req->cmd.xfer == 0) {
+            break;
+        }
+        r->awaiting_data_out = true;
+        return -(int32_t)req->cmd.xfer;
+
+    case WRITE_FILEMARKS:
+        scsi_tape_write_filemarks(r, buf);
+        break;
+
+    case ERASE:
+        scsi_tape_erase(r, buf);
+        break;
+
     default:
         scsi_tape_check_condition(r, SENSE_CODE(INVALID_OPCODE));
         break;
@@ -708,6 +971,31 @@ static void scsi_tape_read_data(SCSIRequest *req)
     scsi_req_complete(req, r->deferred_check ? CHECK_CONDITION : GOOD);
 }
 
+static void scsi_tape_write_data(SCSIRequest *req)
+{
+    SCSITapeReq *r = DO_UPCAST(SCSITapeReq, req, req);
+
+    if (r->awaiting_data_out) {
+        /* First call: fetch the data; the HBA calls back when it is in. */
+        r->awaiting_data_out = false;
+        scsi_req_data(req, req->cmd.xfer);
+        return;
+    }
+
+    switch (req->cmd.buf[0]) {
+    case WRITE_6:
+        scsi_tape_write6(r);
+        break;
+    default:
+        scsi_tape_check_condition(r, SENSE_CODE(INVALID_OPCODE));
+        break;
+    }
+
+    if (req->status == -1) {
+        scsi_req_complete(req, GOOD);
+    }
+}
+
 static uint8_t *scsi_tape_get_buf(SCSIRequest *req)
 {
     SCSITapeReq *r = DO_UPCAST(SCSITapeReq, req, req);
@@ -727,6 +1015,7 @@ static const SCSIReqOps scsi_tape_reqops = {
     .free_req     = scsi_tape_free_request,
     .send_command = scsi_tape_send_command,
     .read_data    = scsi_tape_read_data,
+    .write_data   = scsi_tape_write_data,
     .get_buf      = scsi_tape_get_buf,
 };
 
@@ -752,6 +1041,9 @@ static void scsi_tape_realize(SCSIDevice *dev, Error **errp)
     if (!blkconf_apply_backend_options(&s->qdev.conf, read_only, false,
                                        errp)) {
         return;
+    }
+    if (!read_only) {
+        scsi_tape_note_mount(s);
     }
 
     if (!s->vendor) {
@@ -792,6 +1084,7 @@ static const Property scsi_tape_properties[] = {
     DEFINE_PROP_STRING("ver", SCSITapeState, ver),
     DEFINE_PROP_BOOL("eom-at-eod", SCSITapeState, eom_at_eod, false),
     DEFINE_PROP_BOOL("join-records", SCSITapeState, join_records, false),
+    DEFINE_PROP_UINT32("capacity-mb", SCSITapeState, capacity_mb, 0),
 };
 
 static void scsi_tape_class_init(ObjectClass *klass, const void *data)
