@@ -560,6 +560,8 @@ struct CPUState {
     uint32_t tcg_cflags;
     uint32_t halted;
     int32_t exception_index;
+    vaddr exception_addr;
+    bool exception_addr_valid;
 
     bool vcpu_dirty;
     AccelCPUState *accel;

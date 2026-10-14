@@ -188,8 +188,12 @@ void helper_cbo_zero(CPURISCVState *env, target_ulong address)
     int mmu_idx = riscv_env_mmu_index(env, false);
     uintptr_t ra = GETPC();
     void *mem;
+    CPUState *cs = env_cpu(env);
 
     check_zicbo_envcfg(env, MENVCFG_CBZE, ra);
+
+    cs->exception_addr = address;
+    cs->exception_addr_valid = true;
 
     /* Mask off low-bits to align-down to the cache-block. */
     address &= ~(cbozlen - 1);
@@ -218,6 +222,7 @@ void helper_cbo_zero(CPURISCVState *env, target_ulong address)
             cpu_stb_mmuidx_ra(env, address + i, 0, mmu_idx, ra);
         }
     }
+    cs->exception_addr_valid = false;
 }
 
 /*

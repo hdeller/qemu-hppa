@@ -38,6 +38,9 @@ void cpu_loop(CPURISCVState *env)
         cpu_exec_end(cs);
         qemu_process_cpu_events(cs);
 
+        /* A trap ends the pending cbo.zero address override window. */
+        cs->exception_addr_valid = false;
+
         switch (trapnr) {
         case EXCP_INTERRUPT:
             /* just indicate that signals should be handled asap */

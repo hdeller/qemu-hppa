@@ -1537,7 +1537,12 @@ static void raise_mmu_exception(CPURISCVState *env, target_ulong address,
     default:
         g_assert_not_reached();
     }
-    env->badaddr = address;
+    if (cs->exception_addr_valid) {
+        env->badaddr = cs->exception_addr;
+        cs->exception_addr_valid = false;
+    } else {
+        env->badaddr = address;
+    }
     env->two_stage_lookup = two_stage;
     env->two_stage_indirect_lookup = two_stage_indirect;
 }
@@ -1588,7 +1593,12 @@ void riscv_cpu_do_transaction_failed(CPUState *cs, hwaddr physaddr,
         cs->exception_index = RISCV_EXCP_INST_ACCESS_FAULT;
     }
 
-    env->badaddr = addr;
+    if (cs->exception_addr_valid) {
+        env->badaddr = cs->exception_addr;
+        cs->exception_addr_valid = false;
+    } else {
+        env->badaddr = addr;
+    }
     env->two_stage_lookup = mmuidx_2stage(mmu_idx);
     env->two_stage_indirect_lookup = false;
     cpu_loop_exit_restore(cs, retaddr);
@@ -1621,7 +1631,12 @@ void riscv_cpu_do_unaligned_access(CPUState *cs, vaddr addr,
     default:
         g_assert_not_reached();
     }
-    env->badaddr = addr;
+    if (cs->exception_addr_valid) {
+        env->badaddr = cs->exception_addr;
+        cs->exception_addr_valid = false;
+    } else {
+        env->badaddr = addr;
+    }
     env->two_stage_lookup = mmuidx_2stage(mmu_idx);
     env->two_stage_indirect_lookup = false;
     cpu_loop_exit_restore(cs, retaddr);
@@ -2047,6 +2062,12 @@ void riscv_cpu_do_interrupt(CPUState *cs)
 {
     RISCVCPU *cpu = RISCV_CPU(cs);
     CPURISCVState *env = &cpu->env;
+
+    /*
+     * A trap ends the pending cbo.zero address override window, so drop
+     * any saved rs1 that a store trigger or breakpoint left behind.
+     */
+    cs->exception_addr_valid = false;
     bool virt = env->virt_enabled;
     bool write_gva = false;
     bool always_storeamo = (env->excp_uw2 & RISCV_UW2_ALWAYS_STORE_AMO);

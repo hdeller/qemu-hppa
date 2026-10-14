@@ -787,7 +787,12 @@ static int probe_access_internal(CPUArchState *env, vaddr addr,
         return TLB_INVALID_MASK;
     }
 
-    cpu_loop_exit_sigsegv(env_cpu(env), addr, access_type, maperr, ra);
+    CPUState *cpu = env_cpu(env);
+    if (cpu->exception_addr_valid) {
+        addr = cpu->exception_addr;
+        cpu->exception_addr_valid = false;
+    }
+    cpu_loop_exit_sigsegv(cpu, addr, access_type, maperr, ra);
 }
 
 int probe_access_flags(CPUArchState *env, vaddr addr, int size,
