@@ -842,6 +842,8 @@ static void hppa_machine_reset(MachineState *ms, ResetType type)
 
         cpu_set_pc(cs, firmware_entry);
         cpu[i]->env.psw = PSW_Q;
+        /* Firmware uses FP registers before configuring CCR. */
+        cpu[i]->env.cr[CR_SCRCCR] = 0xc0;
         cpu[i]->env.gr[5] = CPU_HPA + i * 0x1000;
     }
 
