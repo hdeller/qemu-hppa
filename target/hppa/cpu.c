@@ -91,6 +91,7 @@ static TCGTBCPUState hppa_get_tb_cpu_state(CPUState *cs)
 #ifdef CONFIG_USER_ONLY
     flags |= TB_FLAG_UNALIGN * !env_cpu(env)->prctl_unalign_sigbus;
 #else
+    flags |= TB_FLAG_FPU_DISABLED * !(env->cr[CR_SCRCCR] & 0xc0);
     if ((env->sr[4] == env->sr[5])
         & (env->sr[4] == env->sr[6])
         & (env->sr[4] == env->sr[7])) {
