@@ -427,6 +427,21 @@ raise_exception_with_ior(CPUHPPAState *env, int excp, uintptr_t retaddr,
     cpu_loop_exit(cs);
 }
 
+G_NORETURN void HELPER(fpu_mem)(CPUHPPAState *env, target_ulong addr,
+                               uint32_t mmu_idx, uint32_t mop, uint32_t type)
+{
+    hwaddr phys;
+    int prot, excp;
+
+    /* Memory faults take priority over the assist emulation trap. */
+    excp = hppa_get_physical_address(env, addr, mmu_idx, type, mop, &phys, &prot);
+    if (excp < 0) {
+        excp = EXCP_ASSIST_EMU;
+    }
+    raise_exception_with_ior(env, excp, GETPC(), addr,
+                             MMU_IDX_MMU_DISABLED(mmu_idx));
+}
+
 void hppa_cpu_do_transaction_failed(CPUState *cs, hwaddr physaddr,
                                      vaddr addr, unsigned size,
                                      MMUAccessType access_type,

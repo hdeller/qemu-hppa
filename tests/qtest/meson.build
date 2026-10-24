@@ -158,6 +158,8 @@ qtests_alpha = ['boot-serial-test'] + \
 qtests_avr = [ 'boot-serial-test' ]
 
 qtests_hppa = \
+  (config_all_accel.has_key('CONFIG_TCG') and \
+   config_all_devices.has_key('CONFIG_GENERIC_LOADER') ? ['hppa-fpu-test'] : []) + \
   qtests_filter + \
   (config_all_devices.has_key('CONFIG_VGA') ? ['display-vga-test'] : [])
 
