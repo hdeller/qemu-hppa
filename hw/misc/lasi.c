@@ -36,8 +36,7 @@ static bool lasi_chip_mem_valid(void *opaque, hwaddr addr,
     case LASI_IAR:
 
     case LASI_LPT:
-    case LASI_AUDIO:
-    case LASI_AUDIO + 4:
+    case LASI_AUDIO ... LASI_AUDIO + 0xFF:
     case LASI_UART:
     case LASI_LAN:
     case LASI_LAN + 12: /* LASI LAN MAC */
@@ -87,6 +86,13 @@ static MemTxResult lasi_chip_read_with_attrs(void *opaque, hwaddr addr,
         val = s->iar;
         break;
 
+    case LASI_AUDIO ... LASI_AUDIO + 0xFF:
+        /*
+         * Harmony audio not yet emulated.  DIAG (0x3c) reports a running
+         * sample clock, which HP-UX 9 checks before using the beeper.
+         */
+        val = (addr == LASI_AUDIO + 0x3c);
+        break;
     case LASI_LPT:
     case LASI_UART:
     case LASI_LAN:
@@ -158,9 +164,8 @@ static MemTxResult lasi_chip_write_with_attrs(void *opaque, hwaddr addr,
     case LASI_LPT:
         /* XXX: reset parallel port */
         break;
-    case LASI_AUDIO:
-    case LASI_AUDIO + 4:
-        /* XXX: reset audio port */
+    case LASI_AUDIO ... LASI_AUDIO + 0xFF:
+        /* XXX: Harmony audio is not emulated */
         break;
     case LASI_UART:
         /* XXX: reset serial port */
