@@ -855,6 +855,12 @@ static int vram_bit_write(ARTISTState *s, uint32_t pos, int posy,
         vram_write_bufidx(s) == ARTIST_BUFFER_CURSOR2) {
         artist_invalidate_cursor(s);
     }
+
+    if (vram_write_bufidx(s) == ARTIST_BUFFER_CMAP) {
+        /* A colormap change affects every pixel on screen. */
+        artist_invalidate(s);
+    }
+
     return pos;
 }
 
