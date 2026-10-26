@@ -896,6 +896,38 @@ static void hppa_machine_reset(MachineState *ms, ResetType type)
         cpu[i]->env.gr[5] = CPU_HPA + i * 0x1000;
     }
 
+    /*
+     * BTLB equivalence maps for the I/O ranges HP-UX 9 uses
+     * without creating page directory entries: the LASI block and the
+     * central bus (CPU HPA, broadcast).  Must not cover other I/O space, as
+     * HP-UX probes with LPA and skips pdir setup for already mapped pages.
+     */
+    if (!hppa_is_pa20(&cpu[0]->env)) {
+        static const struct { uint32_t start, last; } io_btlb[] = {
+            { 0xf0100000, 0xf01fffff },     /* LASI */
+            { 0xfff80000, 0xffffffff },     /* central bus */
+        };
+        CPUHPPAState *env = &cpu[0]->env;
+
+        for (i = 0; i < ARRAY_SIZE(io_btlb); i++) {
+            HPPATLBEntry *ent = &env->tlb[HPPA_BTLB_ENTRIES(env) - 1 - i];
+
+            ent->itree.start = io_btlb[i].start;
+            ent->itree.last = io_btlb[i].last;
+            ent->pa = io_btlb[i].start;
+            ent->access_id = 0;
+            ent->u = 1;
+            ent->ar_pl2 = 0;
+            ent->ar_pl1 = 0;
+            ent->ar_type = 1;
+            ent->b = 0;
+            ent->d = 1;
+            ent->t = 0;
+            ent->entry_valid = 1;
+            interval_tree_insert(&ent->itree, &env->tlb_root);
+        }
+    }
+
     cpu[0]->env.gr[26] = ms->ram_size;
     cpu[0]->env.gr[25] = cpu[0]->env.kernel_entry;
     cpu[0]->env.gr[24] = cpu[0]->env.cmdline_or_bootorder;
