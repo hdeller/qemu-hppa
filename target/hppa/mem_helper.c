@@ -538,7 +538,15 @@ void HELPER(itlba_pa11)(CPUHPPAState *env, target_ulong addr, target_ulong reg)
 static void set_access_bits_pa11(CPUHPPAState *env, HPPATLBEntry *ent,
                                  target_ulong reg)
 {
-    ent->access_id = extract32(reg, 1, 18);
+    /*
+     * The architecture manual states that if smaller than 18-bit access IDs
+     * are physically implemented in the CPU, only the appropriate number of
+     * rightmost bits of GR[r]{13..30} are stored in the TLB.  Older parisc
+     * chips (PCXS, PCXT, PCXL, PCXL2) only support 15 bit protection IDs.
+     * PCXT' (pa7200) has 18 bit protection IDs, but only 16 bit spaceids.
+     * We currently emulate PA7100 and PA7100LC CPUs, so use 15 bits here.
+     */
+    ent->access_id = extract32(reg, 1, 15);     /* 15-bit PA1.1 PIDs */
     ent->u = extract32(reg, 19, 1);
     ent->ar_pl2 = extract32(reg, 20, 2);
     ent->ar_pl1 = extract32(reg, 22, 2);
