@@ -574,6 +574,47 @@ static void machine_HP_common_init_tail(MachineState *machine, PCIBus *pci_bus,
 }
 
 /*
+ * Local broadcast I/O space: a write to IO_EIR (offset 0) posts an external
+ * interrupt on all processors, CMD_RESET (5) written to IO_COMMAND (0x30)
+ * resets the system.  HP-UX 9 reboots through the latter.
+ */
+#define HPPA_BROADCAST_HPA      0xfffc0000
+#define HPPA_IO_COMMAND         0x30
+#define HPPA_CMD_RESET          5
+
+static uint64_t hppa_broadcast_read(void *opaque, hwaddr addr, unsigned size)
+{
+    return 0;
+}
+
+static void hppa_broadcast_write(void *opaque, hwaddr addr, uint64_t val,
+                                 unsigned size)
+{
+    unsigned int i;
+
+    switch (addr) {
+    case 0:
+        for (i = 0; i < current_machine->smp.cpus; i++) {
+            hppa_io_eir_ops.write(cpu[i], 0, val, 4);
+        }
+        break;
+    case HPPA_IO_COMMAND:
+        if (val == HPPA_CMD_RESET) {
+            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        }
+        break;
+    }
+}
+
+static const MemoryRegionOps hppa_broadcast_ops = {
+    .read = hppa_broadcast_read,
+    .write = hppa_broadcast_write,
+    .endianness = DEVICE_BIG_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
+/*
  * Create HP 715/64 workstation
  */
 static void machine_HP_715_init(MachineState *machine)
@@ -596,6 +637,14 @@ static void machine_HP_715_init(MachineState *machine)
     /* Create ISA bus, needed for PS/2 kbd/mouse port emulation */
     isa_bus = hppa_isa_bus(translate(NULL, IDE_HPA));
     assert(isa_bus);
+
+    /* Local broadcast I/O space */
+    MemoryRegion *dev_mr_bcast = g_new(MemoryRegion, 1);
+    memory_region_init_io(dev_mr_bcast, NULL, &hppa_broadcast_ops, NULL,
+                          "local-broadcast", 0x1000);
+    memory_region_add_subregion(addr_space,
+                                translate(NULL, HPPA_BROADCAST_HPA),
+                                dev_mr_bcast);
 
     /* Init Lasi chip */
     lasi_dev = DEVICE(lasi_init());
