@@ -49,7 +49,6 @@ struct HppaMachineState {
 
 #define MIN_SEABIOS_HPPA_VERSION 26 /* require at least this fw version */
 
-#define HPA_POWER_BUTTON        (FIRMWARE_END - 0x10)
 static hwaddr soft_power_reg;
 
 static void hppa_powerdown_req(Notifier *n, void *opaque)
@@ -122,6 +121,7 @@ static time_t rtc_ref;
 
 static uint64_t io_cpu_read(void *opaque, hwaddr addr, unsigned size)
 {
+    HPPACPU *cpu = opaque;
     uint64_t val = 0;
 
     switch (addr) {
@@ -131,6 +131,8 @@ static uint64_t io_cpu_read(void *opaque, hwaddr addr, unsigned size)
         break;
     case 8:             /* DebugOutputPort */
         return 0xe9;    /* readback */
+    case 16:            /* Power switch button */
+        return cpu->env.power_btn;
     }
     return val;
 }
@@ -138,6 +140,7 @@ static uint64_t io_cpu_read(void *opaque, hwaddr addr, unsigned size)
 static void io_cpu_write(void *opaque, hwaddr addr,
                          uint64_t val, unsigned size)
 {
+    HPPACPU *cpu = opaque;
     unsigned char ch;
     Chardev *debugout;
 
@@ -153,6 +156,9 @@ static void io_cpu_write(void *opaque, hwaddr addr,
         } else {
             fprintf(stderr, "%c", ch);
         }
+        break;
+    case 16:
+        cpu->env.power_btn = val;
         break;
     }
 }
@@ -311,8 +317,6 @@ static TranslateFn *machine_HP_common_init_cpus(MachineState *machine,
         ram_max = FIRMWARE_START;  /* 3.75 GB (32-bit CPU) */
     }
 
-    soft_power_reg = translate(NULL, HPA_POWER_BUTTON);
-
     for (unsigned int i = 0; i < smp_cpus; i++) {
         g_autofree char *name = g_strdup_printf("cpu%u-io-eir", i);
         g_autofree char *cflush_name = NULL;
@@ -347,10 +351,11 @@ static TranslateFn *machine_HP_common_init_cpus(MachineState *machine,
     /* RTC and DebugOutputPort on CPU #0 */
     cpu_region = g_new(MemoryRegion, 1);
     memory_region_init_io(cpu_region, OBJECT(cpu[0]), &hppa_io_helper_ops,
-                          cpu[0], "cpu0-io-rtc", 2 * sizeof(uint64_t));
+                          cpu[0], "cpu0-io-rtc", 3 * sizeof(uint64_t));
     memory_region_add_subregion(addr_space,
                                 translate(NULL, cpu[0]->env.cpu_hpa + 16),
                                 cpu_region);
+    soft_power_reg = translate(NULL, cpu[0]->env.cpu_hpa + 16 + 16);
 
     /* Main memory region. */
     if (machine->ram_size > ram_max) {
